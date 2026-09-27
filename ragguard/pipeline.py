@@ -6,11 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ragguard.scanner import Document, RAGScanner, ScanReport
+from ragguard.scanner import (
+    Document,
+    RAGScanner,
+    ScanReport,
+    resolve_document_id,
+)
 
 
 class RAGPipelineGuard:
-    """Middleware guard for RAG pipelines. Call scan() at ingestion time."""
+    """Middleware guard for RAG pipelines. Call ingest() at ingestion time."""
 
     def __init__(self, auto_reject: bool = False):
         self.scanner = RAGScanner()
@@ -25,30 +30,21 @@ class RAGPipelineGuard:
         doc = Document(text=text, metadata=metadata or {})
         report = self.scanner.scan_documents([doc])
 
-        if self.auto_reject and not report.is_clean:
-            return {
-                "accepted": False,
-                "document_id": doc.id,
-                "findings": [
-                    {
-                        "type": f.finding_type.value,
-                        "severity": f.severity.value,
-                        "description": f.description,
-                        "remediation": f.remediation,
-                    }
-                    for f in report.findings
-                ],
-                "report": report.summary(),
-            }
+        blocked = self.auto_reject and report.has_blocking_findings
 
         return {
-            "accepted": True,
-            "document_id": doc.id,
+            "accepted": not blocked,
+            "document_id": resolve_document_id(doc),
+            "review_required": bool(report.findings) and not blocked,
             "findings": [
                 {
                     "type": f.finding_type.value,
                     "severity": f.severity.value,
+                    "family": f.family,
                     "description": f.description,
+                    "evidence": f.evidence,
+                    "remediation": f.remediation,
+                    "owasp_mapping": f.owasp_mapping,
                 }
                 for f in report.findings
             ],
@@ -79,26 +75,31 @@ class RAGPipelineGuard:
 
         report = self.scanner.scan_documents(docs)
 
+        # Findings carry the scanner's own document id, so correlate with the
+        # same resolver — deriving ids from doc.text here silently matches nothing.
+        by_document: dict[str, list] = {}
+        for finding in report.findings:
+            by_document.setdefault(finding.document_id, []).append(finding)
+
+        documents_out = []
+        for doc in docs:
+            doc_id = resolve_document_id(doc)
+            findings = by_document.get(doc_id, [])
+            documents_out.append({
+                "id": doc_id,
+                "accepted": not any(
+                    f.severity.value in ("critical", "high") for f in findings
+                ),
+                "findings_count": len(findings),
+                "families": sorted({f.family for f in findings if f.family}),
+            })
+
         return {
             "total": len(docs),
             "clean": report.is_clean,
             "summary": report.summary(),
             "severity_summary": report.severity_summary,
-            "documents": [
-                {
-                    "id": doc.id,
-                    "accepted": not any(
-                        f.document_id == (doc.id or doc.text[:50])
-                        for f in report.findings
-                        if f.severity.value in ("critical", "high")
-                    ),
-                    "findings_count": sum(
-                        1 for f in report.findings
-                        if f.document_id == (doc.id or doc.text[:50])
-                    ),
-                }
-                for doc in docs
-            ],
+            "documents": documents_out,
         }
 
     def export_report(self, report: ScanReport, path: str | Path) -> None:
@@ -111,6 +112,7 @@ class RAGPipelineGuard:
                 {
                     "type": f.finding_type.value,
                     "severity": f.severity.value,
+                    "family": f.family,
                     "document_id": f.document_id,
                     "description": f.description,
                     "evidence": f.evidence,

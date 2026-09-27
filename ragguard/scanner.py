@@ -1,13 +1,39 @@
-"""Core scanning engine for RAG pipeline security assessment."""
+"""Core scanning engine for RAG pipeline security assessment.
+
+The scanner is deliberately dependency-light: detection is heuristic and
+explainable rather than model-based, so every finding traces back to a named
+pattern family.
+
+Detection runs on two surfaces:
+
+* **canonical** — text is HTML-entity decoded, NFKC normalised, zero-width and
+  bidi control characters are stripped, whitespace is collapsed and the result
+  is lowercased before matching. This defeats the cheap obfuscation tricks
+  (``&#x49;gnore``, ``ig\u200bnore``, ``IGNORE   PREVIOUS``).
+* **raw** — matched against the original text, for families whose *signal is the
+  obfuscation itself* (encoded payloads, dangerous markup).
+
+OWASP mappings follow the **OWASP Top 10 for LLM Applications 2025**.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import html
 import re
-from dataclasses import dataclass, field
+import unicodedata
+from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any
+
+# --- OWASP Top 10 for LLM Applications (2025) categories used by the scanner ---
+
+LLM01_PROMPT_INJECTION = "LLM01: Prompt Injection"
+LLM02_SENSITIVE_INFO = "LLM02: Sensitive Information Disclosure"
+LLM04_POISONING = "LLM04: Data and Model Poisoning"
+LLM05_IMPROPER_OUTPUT = "LLM05: Improper Output Handling"
+LLM07_SYSTEM_PROMPT = "LLM07: System Prompt Leakage"
+LLM08_VECTOR_WEAKNESSES = "LLM08: Vector and Embedding Weaknesses"
 
 
 class Severity(str, Enum):
@@ -39,61 +65,272 @@ class Finding:
     evidence: str
     remediation: str
     owasp_mapping: str = ""
+    family: str = ""
 
 
-# --- Prompt injection payloads for detection ---
+@dataclass(frozen=True)
+class PatternFamily:
+    """A named, explainable detection rule.
 
-_INJECTION_PATTERNS = [
-    # Direct instruction override
-    re.compile(r"(?i)(ignore\s+(the\s+)?(above|previous|system)\s*(instructions?|prompt|context))"),
-    re.compile(r"(?i)(you\s+(are\s+)?now\s+(a\s+)?(different\s+)?(model|assistant|entity))"),
-    re.compile(r"(?i)((new\s+)?(instruction|rule|directive)\s*:)", re.MULTILINE),
-    # System prompt extraction
-    re.compile(r"(?i)(repeat\s+(your|the)\s+(system\s+)?prompt)"),
-    re.compile(r"(?i)(what\s+(were|are)\s+(your\s+)?(instructions?|system\s+prompt))"),
-    re.compile(r"(?i)(((begin|start)\s+(output|response).*(end|stop)\s+(output|response)))", re.DOTALL),
-    # Instruction hijacking
-    re.compile(r"(?i)((\\\\|`|<\/?script)[^<]*>|(javascript:|data:))", re.MULTILINE),
-    re.compile(r"(?i)((previous|above)\s+(response|output|message)[^\n]*(contains|reveals|shows))"),
-    # Encoding tricks
-    re.compile(r"(&#x[0-9a-fA-F]+;|%[0-9a-fA-F]{2})"),
-    re.compile(r"(\x80|\x9b|\x90|\x9d)", re.MULTILINE),  # Invisible control chars
-    # Jailbreak patterns
-    re.compile(r"(?i)((developer|debug|test|maintenance)\s+mode)"),
-    re.compile(r"(?i)((d\s*a\s*r\s*k\s*w\s*e\s*b|shadow)\s*(net|web|zone))"),
-    # Data exfiltration patterns
-    re.compile(r"(?i)(output\s+(all|everything)\s+(text|content|data))"),
-    re.compile(r"(?i)(base64|hex|encode)\s*(this|the\s+following|above)"),
-]
+    ``family`` is what shows up in findings and reports; ``surface`` selects
+    whether the rule matches the canonicalised text (default) or the raw text.
+    """
+    family: str
+    pattern: re.Pattern[str]
+    severity: Severity
+    owasp: str
+    remediation: str
+    surface: str = "canonical"
 
-# --- Metadata injection patterns ---
 
-_METADATA_INJECTION_PATTERNS = [
-    # KEY=VALUE format (common in EXIF, PDF metadata)
-    re.compile(r"(\b[A-Z_]{4,}\s*=\s*[\"'][^\"'<>\n]{10,})"),
-    # JSON-style metadata: "FUNCTION": "write_file", "ACTION": "INVOKE"
-    re.compile(r"[\"']?(\bFUNCTION\b|\bACTION\b|\bTOOL\b)[\"']?\s*[:=]\s*[\"']?(\b(write_|exec|invoke|rm_|curl|wget|http|POST|GET)\b|[^\"'\n]{3,})[\"']?", re.IGNORECASE),
-    # Code execution in any metadata value
-    re.compile(r"(\b(?:eval|exec|compile|import|require|load)\s*\()", re.IGNORECASE),
-    re.compile(r"(\b(?:os\.system|subprocess|exec|spawn)\s)", re.IGNORECASE),
-    # Data exfiltration commands in metadata
-    re.compile(r"\b(?:curl|wget|nc|ncat)\s+[\"']?https?://", re.IGNORECASE),
-    # API key or credential patterns in metadata
-    re.compile(r"\b(?:sk-[a-zA-Z0-9]{20,}|api[-_]?key\s*[:=]\s*[^\s\n]{10,})", re.IGNORECASE),
-]
+# --- Canonicalisation -------------------------------------------------------
 
-# --- Chunk-splitting detection ---
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2028-\u202f\u2060-\u2064\ufeff]")
+_WHITESPACE_RE = re.compile(r"\s+")
 
-_SPLIT_INJECTION_MARKERS = [
-    # Instruction fragments that only become malicious when concatenated
-    re.compile(r"(?<=[.!?])\s*(begin|start|first\s+part|step\s+1)", re.IGNORECASE),
-    re.compile(r"(?<=[.!?])\s*(end|stop|finish|last\s+part|step\s+\d+)", re.IGNORECASE),
-    # HTML/XML tag injection across chunks
-    re.compile(r"(<[a-z][a-z0-9]*[^>]*>)", re.IGNORECASE),
-    re.compile(r"(</[a-z][a-z0-9]*>)", re.IGNORECASE),
-    # SQL-like patterns in documents
-    re.compile(r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP)\b)", re.IGNORECASE),
-]
+
+def canonicalize(text: str) -> str:
+    """Normalise text so obfuscated payloads match plain-text rules.
+
+    Decodes HTML entities, applies NFKC normalisation, strips zero-width and
+    bidi control characters, collapses all whitespace to single spaces and
+    lowercases the result.
+    """
+    decoded = html.unescape(text)
+    normalised = unicodedata.normalize("NFKC", decoded)
+    stripped = _ZERO_WIDTH_RE.sub("", normalised)
+    return _WHITESPACE_RE.sub(" ", stripped).lower()
+
+
+# --- Prompt injection families ---------------------------------------------
+
+_INSTRUCTION_VERBS = r"(?:ignore|disregard|forget|override|bypass|skip)"
+_INSTRUCTION_QUALIFIERS = (
+    r"(?:(?:all|any|the|these|those|your|my|our|its|previous|prior|preceding|"
+    r"above|earlier|initial|original|system|developer|hidden|new|following)\s+){0,6}"
+)
+_INSTRUCTION_NOUNS = (
+    r"(?:instructions?|prompts?|rules?|guidelines?|guidance|directives?|context|"
+    r"constraints?|safeguards?|polic(?:y|ies)|commands?)"
+)
+
+INJECTION_FAMILIES: tuple[PatternFamily, ...] = (
+    PatternFamily(
+        family="instruction_override",
+        pattern=re.compile(
+            rf"\b{_INSTRUCTION_VERBS}\s+{_INSTRUCTION_QUALIFIERS}{_INSTRUCTION_NOUNS}\b"
+        ),
+        severity=Severity.CRITICAL,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Reject or quarantine the document. Treat retrieved text as data, never as "
+            "instructions, and apply instruction-hierarchy controls at prompt assembly."
+        ),
+    ),
+    PatternFamily(
+        family="persona_override",
+        pattern=re.compile(
+            r"\byou\s+(?:are|will\s+be|must\s+be)\s+now\s+(?:a\s+|an\s+|the\s+)?"
+            r"(?:(?:different|unrestricted|unfiltered|uncensored|jailbroken|evil|malicious|"
+            r"rogue|new)\s+)?(?:model|assistant|entity|ai|persona|version)\b"
+            r"|\b(?:act|behave|respond|pretend|roleplay|simulate)\s+as\s+(?:an?\s+|the\s+)?"
+            r"(?:unrestricted|unfiltered|uncensored|unbounded|jailbroken|evil|malicious|"
+            r"rogue|hacker|dan|root|admin|administrator|superuser)\b"
+            r"|\bdo\s+anything\s+now\b"
+        ),
+        severity=Severity.CRITICAL,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Reject or quarantine the document. Pin the assistant persona in the system "
+            "prompt and refuse documents that attempt to redefine it."
+        ),
+    ),
+    PatternFamily(
+        family="system_prompt_extraction",
+        pattern=re.compile(
+            r"\brepeat\s+(?:your|the)\s+(?:system\s+|initial\s+|original\s+)?"
+            r"(?:prompt|instructions)\b"
+            r"|\bwhat\s+(?:were|are|was)\s+(?:your|the)\s+"
+            r"(?:instructions?|system\s+prompt|initial\s+prompt)\b"
+            r"|\b(?:print|show|reveal|output|disclose|leak|dump|expose|tell\s+me)\s+"
+            r"(?:me\s+)?(?:your|the)\s+(?:system\s+|initial\s+|original\s+|hidden\s+)*"
+            r"(?:prompt|instructions|rules)\b"
+        ),
+        severity=Severity.HIGH,
+        owasp=LLM07_SYSTEM_PROMPT,
+        remediation=(
+            "Keep secrets, credentials and authorisation logic out of the system prompt; "
+            "treat it as publicly visible and enforce policy in application code."
+        ),
+    ),
+    PatternFamily(
+        family="delimiter_injection",
+        pattern=re.compile(
+            r"<\s*/?\s*(?:script|iframe|object|embed|svg|form|meta|link|base)\b[^>]*>"
+            r"|\bjavascript\s*:|\bdata\s*:\s*text/html"
+        ),
+        severity=Severity.HIGH,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Strip or escape markup during ingestion and render retrieved content as inert text."
+        ),
+        surface="raw",
+    ),
+    PatternFamily(
+        family="encoding_obfuscation",
+        pattern=re.compile(
+            r"(?:&#x?[0-9a-fA-F]{2,6};){2,}"          # runs of HTML entities
+            r"|(?:%[0-9a-fA-F]{2}){3,}"               # runs of percent-encoding
+            r"|[\x80\x90\x9b\x9d]"                    # C1 / invisible control bytes
+        ),
+        severity=Severity.MEDIUM,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Canonicalise (entity-decode + NFKC) before scanning, and reject documents whose "
+            "payload only appears after decoding."
+        ),
+        surface="raw",
+    ),
+    PatternFamily(
+        family="jailbreak_mode",
+        pattern=re.compile(
+            r"\b(?:developer|debug|maintenance|sudo|god)\s+mode\b"
+            r"|\bd\s*a\s*r\s*k\s*(?:w\s*e\s*b|n\s*e\s*t)\b"
+            r"|\bshadow\s*(?:net|web|zone)\b"
+        ),
+        severity=Severity.HIGH,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Reject the document; jailbreak framings have no legitimate place in a corpus."
+        ),
+    ),
+    PatternFamily(
+        family="data_exfiltration",
+        pattern=re.compile(
+            r"\boutput\s+(?:all|everything|the\s+entire)\s+"
+            r"(?:text|content|data|conversation|context|history)\b"
+            r"|\b(?:base64|hex|rot13)\s+(?:this|the\s+following|above|it)\b"
+            r"|\b(?:exfiltrate|send|post|upload)\s+(?:it|them|the\s+data|all\s+data)\s+to\b"
+        ),
+        severity=Severity.HIGH,
+        owasp=LLM02_SENSITIVE_INFO,
+        remediation=(
+            "Redact or tokenise sensitive fields before they enter the context window and "
+            "filter retrieval by caller entitlements."
+        ),
+    ),
+)
+
+# --- Metadata injection families -------------------------------------------
+
+METADATA_FAMILIES: tuple[PatternFamily, ...] = (
+    PatternFamily(
+        family="metadata_key_value_payload",
+        pattern=re.compile(r"\b[A-Z_]{4,}\s*=\s*[\"'][^\"'<>\n]{10,}"),
+        severity=Severity.HIGH,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation="Strip instruction-bearing fields from metadata before ingestion.",
+    ),
+    PatternFamily(
+        family="metadata_tool_call",
+        pattern=re.compile(
+            r"[\"']?\b(?:FUNCTION|ACTION|TOOL)\b[\"']?\s*[:=]\s*[\"']?"
+            r"(?:write_|exec|invoke|rm_|curl|wget|http|POST|GET)\b",
+            re.IGNORECASE,
+        ),
+        severity=Severity.CRITICAL,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Reject documents whose metadata names callable tools; allow-list metadata keys."
+        ),
+    ),
+    PatternFamily(
+        family="metadata_code_execution",
+        pattern=re.compile(
+            r"\b(?:eval|exec|compile|subprocess|os\.system|spawn|require)\s*[\(.]",
+            re.IGNORECASE,
+        ),
+        severity=Severity.CRITICAL,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation="Strip all executable fields from metadata; metadata must be data, not code.",
+    ),
+    PatternFamily(
+        family="metadata_exfiltration_command",
+        pattern=re.compile(r"\b(?:curl|wget|nc|ncat)\s+[\"']?https?://", re.IGNORECASE),
+        severity=Severity.HIGH,
+        owasp=LLM02_SENSITIVE_INFO,
+        remediation=(
+            "Strip outbound-request fields from metadata; egress should never come from metadata."
+        ),
+    ),
+    PatternFamily(
+        family="metadata_credential_leak",
+        pattern=re.compile(
+            r"\bsk-[a-zA-Z0-9]{20,}|\bapi[-_]?key\s*[:=]\s*\S{10,}", re.IGNORECASE
+        ),
+        severity=Severity.CRITICAL,
+        owasp=LLM02_SENSITIVE_INFO,
+        remediation="Redact credentials at ingestion and rotate anything that reached the index.",
+    ),
+)
+
+# --- Chunk-splitting / structural families ---------------------------------
+
+SPLIT_FAMILIES: tuple[PatternFamily, ...] = (
+    PatternFamily(
+        family="split_marker_open",
+        pattern=re.compile(r"(?<=[.!?])\s*(?:begin|start|first\s+part|step\s+1)\b"),
+        severity=Severity.MEDIUM,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Reassemble split documents before scanning; scan the parent document, not chunks."
+        ),
+    ),
+    PatternFamily(
+        family="split_marker_close",
+        pattern=re.compile(r"(?<=[.!?])\s*(?:end|stop|finish|last\s+part|step\s+\d+)\b"),
+        severity=Severity.MEDIUM,
+        owasp=LLM01_PROMPT_INJECTION,
+        remediation=(
+            "Reassemble split documents before scanning; scan the parent document, not chunks."
+        ),
+    ),
+    PatternFamily(
+        family="structural_dangerous_tag",
+        pattern=re.compile(
+            r"<\s*/?\s*(?:script|iframe|object|embed|svg|form|base)\b[^>]*>"
+            r"|\bon[a-z]+\s*=\s*[\"']?[a-z]+",
+        ),
+        severity=Severity.MEDIUM,
+        owasp=LLM05_IMPROPER_OUTPUT,
+        remediation=(
+            "Strip executable markup at ingestion; retrieved text should never be rendered as HTML."
+        ),
+    ),
+    PatternFamily(
+        family="structural_sql_keyword",
+        pattern=re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[\s\S]{0,40}?\bFROM\b"),
+        severity=Severity.LOW,
+        owasp=LLM05_IMPROPER_OUTPUT,
+        remediation=(
+            "Parameterise any query built from retrieved text; never concatenate document "
+            "content into SQL."
+        ),
+    ),
+)
+
+_ACTION_ENUMERATION_RE = re.compile(r"\binstruction\s*:")
+
+
+def resolve_document_id(doc: Document) -> str:
+    """Canonical identifier for a document: explicit id, else a content hash.
+
+    Use this wherever findings are correlated back to documents — the scanner
+    uses it internally, and callers that re-derive ids by hand (e.g. slicing
+    ``doc.text``) will silently fail to match findings.
+    """
+    return doc.id or RAGScanner._hash_content(doc.text[:100])
+
 
 
 class RAGScanner:
@@ -125,7 +362,7 @@ class RAGScanner:
         self._findings = []
 
         for doc in documents:
-            doc_id = doc.id or self._hash_content(doc.text[:100])
+            doc_id = resolve_document_id(doc)
 
             if check_prompt_injection:
                 self._scan_prompt_injection(doc, doc_id)
@@ -145,61 +382,90 @@ class RAGScanner:
         )
 
     def _scan_prompt_injection(self, doc: Document, doc_id: str) -> None:
-        for i, pattern in enumerate(_INJECTION_PATTERNS):
-            matches = list(pattern.finditer(doc.text))
-            if matches:
+        canonical = canonicalize(doc.text)
+        for rule in INJECTION_FAMILIES:
+            haystack = doc.text if rule.surface == "raw" else canonical
+            match = rule.pattern.search(haystack)
+            if match:
                 self._findings.append(Finding(
                     finding_type=FindingType.PROMPT_INJECTION_IN_DOCUMENT,
-                    severity=Severity.CRITICAL,
+                    severity=rule.severity,
                     document_id=doc_id,
-                    description=f"Prompt injection pattern detected in document",
-                    evidence=matches[0].group(0)[:100],
-                    remediation=f"Sanitize or reject document containing injection payload: pattern {i}",
-                    owasp_mapping="LLM07: Training Data Poisoning",
+                    description=f"Prompt injection detected in document body ({rule.family})",
+                    evidence=self._evidence(doc.text, match.group(0)),
+                    remediation=rule.remediation,
+                    owasp_mapping=rule.owasp,
+                    family=rule.family,
                 ))
 
     def _scan_metadata(self, doc: Document, doc_id: str) -> None:
         metadata_str = str(doc.metadata or {})
-        for i, pattern in enumerate(_METADATA_INJECTION_PATTERNS):
-            matches = list(pattern.finditer(metadata_str))
-            if matches:
+        for rule in METADATA_FAMILIES:
+            match = rule.pattern.search(metadata_str)
+            if match:
                 self._findings.append(Finding(
                     finding_type=FindingType.METADATA_INJECTION,
-                    severity=Severity.HIGH,
+                    severity=rule.severity,
                     document_id=doc_id,
-                    description=f"Malicious payload detected in document metadata",
-                    evidence=matches[0].group(0)[:100],
-                    remediation="Strip all executable fields from document metadata before ingestion",
-                    owasp_mapping="LLM07: Training Data Poisoning",
+                    description=f"Malicious payload in document metadata ({rule.family})",
+                    evidence=match.group(0)[:100],
+                    remediation=rule.remediation,
+                    owasp_mapping=rule.owasp,
+                    family=rule.family,
                 ))
 
     def _scan_chunk_splitting(self, doc: Document, doc_id: str) -> None:
-        for i, pattern in enumerate(_SPLIT_INJECTION_MARKERS):
-            matches = list(pattern.finditer(doc.text))
-            if matches:
+        for rule in SPLIT_FAMILIES:
+            match = rule.pattern.search(doc.text)
+            if match:
                 self._findings.append(Finding(
                     finding_type=FindingType.CHUNK_SPLIT_ATTACK,
-                    severity=Severity.MEDIUM,
+                    severity=rule.severity,
                     document_id=doc_id,
-                    description=f"Potential chunk-splitting attack marker detected",
-                    evidence=matches[0].group(0)[:80],
-                    remediation="Validate cross-chunk instruction boundaries and reassemble before scanning",
-                    owasp_mapping="LLM06: Insecure Output Handling",
+                    description=f"Structural risk in document ({rule.family})",
+                    evidence=match.group(0)[:100],
+                    remediation=rule.remediation,
+                    owasp_mapping=rule.owasp,
+                    family=rule.family,
                 ))
 
     def _scan_canonical_injection(self, doc: Document, doc_id: str) -> None:
-        """Detect canonicalization bypass attempts."""
-        normalized = doc.text.lower().strip()
-        if "ignore previous" in normalized and "instruction:" in normalized:
+        """Detect payloads combining an instruction override with an enumerated action.
+
+        Runs on canonicalised text, so entity-encoded, zero-width-split and
+        whitespace-padded variants are caught (e.g. ``&#x49;gnore previous
+        instructions``).
+        """
+        canonical = canonicalize(doc.text)
+        has_override = INJECTION_FAMILIES[0].pattern.search(canonical) is not None
+        if has_override and _ACTION_ENUMERATION_RE.search(canonical):
             self._findings.append(Finding(
                 finding_type=FindingType.CANONICAL_INJECTION,
                 severity=Severity.CRITICAL,
                 document_id=doc_id,
-                description="Canonical injection bypass attempt in document body",
-                evidence="Combined 'ignore previous' + 'instruction' pattern",
-                remediation="Apply input canonicalization and reject adversarial patterns",
-                owasp_mapping="LLM01: Prompt Injection",
+                description=(
+                    "Canonical injection bypass: instruction override combined with an "
+                    "enumerated action in the same document"
+                ),
+                evidence=self._evidence(doc.text, "instruction:"),
+                remediation=(
+                    "Apply input canonicalisation (entity decode + NFKC + zero-width strip) and "
+                    "reject documents whose payload only surfaces after normalisation."
+                ),
+                owasp_mapping=LLM01_PROMPT_INJECTION,
+                family="canonical_override_plus_action",
             ))
+
+    @staticmethod
+    def _evidence(raw: str, matched: str) -> str:
+        """Return the matched phrase in its original casing where possible."""
+        needle = matched.strip()
+        if not needle:
+            return ""
+        idx = raw.lower().find(needle)
+        if idx >= 0:
+            return raw[idx:idx + len(needle)][:120]
+        return needle[:120]
 
     def _severity_summary(self) -> dict[str, int]:
         summary: dict[str, int] = {}
@@ -234,10 +500,17 @@ class ScanReport:
     def is_clean(self) -> bool:
         return len(self.findings) == 0
 
+    @property
+    def has_blocking_findings(self) -> bool:
+        """True when any finding is critical or high severity."""
+        return any(
+            f.severity in (Severity.CRITICAL, Severity.HIGH) for f in self.findings
+        )
+
     def summary(self) -> str:
         lines = [
-            f"RAG Security Scan Report",
-            f"=" * 40,
+            "RAG Security Scan Report",
+            "=" * 40,
             f"Documents scanned: {self.total_documents}",
             f"Total findings: {len(self.findings)}",
         ]

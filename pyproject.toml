@@ -1,6 +1,6 @@
 [project]
 name = "ragguard"
-version = "0.1.0"
+version = "0.1.1"
 description = "Security scanner for Retrieval-Augmented Generation pipelines — detects prompt injection, metadata poisoning, chunk-splitting exploits, and vector store contamination"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,6 +8,7 @@ license = {text = "MIT"}
 authors = [
     {name = "wif1c0ldspot"}
 ]
+keywords = ["rag", "llm-security", "prompt-injection", "owasp-llm-top-10", "vector-store"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -19,15 +20,15 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# Runtime dependencies are intentionally minimal: detection is heuristic and
+# explainable (regex families), and numpy only powers the vector-store checker.
+# Framework integrations (LangChain, LlamaIndex, ChromaDB) are on the roadmap;
+# when they land they belong in optional extras, not the base install.
 dependencies = [
-    "chromadb>=0.5.0",
-    "langchain>=0.2.0",
-    "openai>=1.30.0",
-    "tiktoken>=0.7.0",
-    "pydantic>=2.0.0",
+    "numpy>=1.26",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
@@ -36,22 +37,34 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/joelchua/ragguard"
-Documentation = "https://github.com/joelchua/ragguard#readme"
-Repository = "https://github.com/joelchua/ragguard.git"
+Homepage = "https://github.com/wif1c0ldspot/ragguard"
+Documentation = "https://github.com/wif1c0ldspot/ragguard/blob/main/docs/ARCHITECTURE.md"
+Repository = "https://github.com/wif1c0ldspot/ragguard"
 
-[tool.uv]
-dev-dependencies = [
-    "pytest>=8.0.0",
-    "pytest-cov>=5.0.0",
-    "ruff>=0.5.0",
-    "mypy>=1.10.0",
-]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ragguard"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 100
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.mypy]
+# numpy 2.x stubs use PEP 695 `type` statements, which mypy only parses when it
+# is told to target 3.12+. The package still supports 3.10 at runtime; this only
+# affects how the stubs are parsed.
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-q"
