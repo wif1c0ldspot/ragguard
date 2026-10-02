@@ -38,6 +38,9 @@ jobs:
       - name: Tests
         run: uv run --frozen pytest --cov=ragguard --cov-report=term-missing
 
+      - name: Detection evaluation gate
+        run: uv run --frozen python evals/run.py --quiet --check evals/thresholds.json
+
       - name: Smoke-test attack demonstrations
         run: uv run --frozen python examples/document_poisoning_demos.py
 
@@ -55,6 +58,15 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/ragguard-wheel/bin/python" --no-deps dist/*.whl
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/ragguard-wheel/bin/python" -I -c "from ragguard import ContentBoundary, Document; assert ContentBoundary().require(Document('Useful facts.')) == 'Useful facts.'"
+          # The base install is standard-library only: schemas ship as package data
+          # and the vector checker explains how to install its extra.
+          "$RUNNER_TEMP/ragguard-wheel/bin/python" -I -c "import importlib.util, ragguard; assert importlib.util.find_spec('numpy') is None; assert ragguard.load_schema('report')['\$schema']; ragguard.load_schema('worker-protocol')
+          try:
+              ragguard.VectorStoreIntegrityChecker
+          except ImportError as exc:
+              assert 'ragguard[vector]' in str(exc)
+          else:
+              raise SystemExit('expected ImportError without numpy')"
 
   deepseek-plugin:
     runs-on: ubuntu-latest

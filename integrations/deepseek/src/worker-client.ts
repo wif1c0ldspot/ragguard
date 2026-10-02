@@ -36,10 +36,17 @@ interface Pending {
   cleanup: () => void;
 }
 
+/** Versions announced by the worker's ready handshake. */
+export interface WorkerInfo {
+  readonly rulesetVersion: string;
+  readonly schemaVersion: string;
+  readonly packageVersion: string;
+}
+
 interface Generation {
   process: ChildProcessWithoutNullStreams;
   ready: boolean;
-  ruleset?: string;
+  info?: WorkerInfo;
   buffer: Buffer;
   pending: Map<string, Pending>;
   retired: boolean;
@@ -51,6 +58,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const shortString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 256;
+const READY_KEYS = ['package_version', 'protocol', 'ruleset_version', 'schema_version', 'type'];
+const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]) => {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+};
 
 /** One persistent worker. Any protocol or transport ambiguity fails all in-flight checks. */
 export class WorkerClient {
@@ -114,6 +126,11 @@ export class WorkerClient {
     }
   }
 
+  /** Versions from the current worker's handshake; undefined until a worker is ready. */
+  get workerInfo(): WorkerInfo | undefined {
+    return this.current?.info;
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.current) this.retire(this.current);
@@ -164,9 +181,14 @@ export class WorkerClient {
   private dispatch(generation: Generation, value: unknown): void {
     if (!isRecord(value) || value.protocol !== 1) throw failure();
     if (!generation.ready) {
-      if (value.type !== 'ready' || !shortString(value.ruleset_version) || Object.keys(value).length !== 3) throw failure();
+      if (value.type !== 'ready' || !hasExactKeys(value, READY_KEYS) || !shortString(value.ruleset_version) ||
+          !shortString(value.schema_version) || !shortString(value.package_version)) throw failure();
       generation.ready = true;
-      generation.ruleset = value.ruleset_version;
+      generation.info = Object.freeze({
+        rulesetVersion: value.ruleset_version,
+        schemaVersion: value.schema_version,
+        packageVersion: value.package_version,
+      });
       for (const pending of generation.pending.values()) this.write(generation, pending.frame);
       return;
     }
@@ -174,7 +196,8 @@ export class WorkerClient {
     if (value.ok !== true || typeof value.release !== 'boolean' ||
         !['accept', 'review', 'reject'].includes(value.decision as string) ||
         !Array.isArray(value.families) || value.families.some((family) => !shortString(family)) ||
-        value.ruleset_version !== generation.ruleset || !shortString(value.schema_version) ||
+        !generation.info || value.ruleset_version !== generation.info.rulesetVersion ||
+        value.schema_version !== generation.info.schemaVersion ||
         Object.keys(value).length !== 8 ||
         (value.decision === 'accept' && !value.release) ||
         (value.decision === 'reject' && value.release) ||

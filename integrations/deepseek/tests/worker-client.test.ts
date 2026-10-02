@@ -34,13 +34,33 @@ test('reuses a worker and sends the fixed, shell-free Python command', async () 
   } finally { await client.close(); }
 });
 
-for (const mode of ['no-ready', 'hang', 'crash', 'malformed', 'oversized', 'unknown', 'unsafe', 'version', 'invalid-utf8', 'review', 'error', 'extra', 'ready-again']) {
+for (const mode of ['no-ready', 'hang', 'crash', 'malformed', 'oversized', 'unknown', 'unsafe', 'version', 'invalid-utf8', 'review', 'error', 'extra', 'ready-again',
+  'ready-no-package', 'ready-extra', 'ready-bad-schema', 'ready-long-package', 'schema-mismatch']) {
   test(`fails closed for ${mode}`, async () => {
     const client = make(mode);
     try { await assert.rejects(client.check(documents), /content withheld/); }
     finally { await client.close(); }
   });
 }
+
+test('exposes handshake versions only while a worker is ready', async () => {
+  const client = make('normal');
+  try {
+    assert.equal(client.workerInfo, undefined);
+    await client.check(documents);
+    assert.deepEqual(client.workerInfo, { rulesetVersion: 'test', schemaVersion: '1', packageVersion: '0.0.0-test' });
+    assert.ok(Object.isFrozen(client.workerInfo));
+  } finally { await client.close(); }
+  assert.equal(client.workerInfo, undefined);
+});
+
+test('ready message without package_version fails closed and exposes no worker info', async () => {
+  const client = make('ready-no-package');
+  try {
+    await assert.rejects(client.check(documents), /content withheld/);
+    assert.equal(client.workerInfo, undefined);
+  } finally { await client.close(); }
+});
 
 test('monitor mode can release reviewed content', async () => {
   const client = make('review', { mode: 'monitor' });
@@ -186,7 +206,7 @@ test('request deadline includes time waiting for previous worker retirement', as
     }) + '\n'));
   });
   const client = new WorkerClient({ ...options, timeoutMs: 25 }, () => {
-    queueMicrotask(() => child.stdout.emit('data', Buffer.from('{"protocol":1,"type":"ready","ruleset_version":"test"}\n')));
+    queueMicrotask(() => child.stdout.emit('data', Buffer.from('{"protocol":1,"type":"ready","ruleset_version":"test","schema_version":"1","package_version":"0.0.0-test"}\n')));
     return child;
   });
   let guard: ReturnType<typeof setTimeout> | undefined;

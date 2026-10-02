@@ -270,7 +270,7 @@ def demo_cross_user_contamination():
                  id="user-a-fin-001"),
     ]
     user_b_docs = [
-        Document(text="User B competitive intelligence on Aumovio.",
+        Document(text="User B competitive intelligence on Acme Corp.",
                  embedding=[0.81, 0.19, 0.51, 0.09, 0.89],  # Very close to A
                  id="user-b-intel-001"),
     ]

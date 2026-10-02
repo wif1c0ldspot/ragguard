@@ -1,6 +1,6 @@
 [project]
 name = "ragguard"
-version = "0.1.1"
+version = "0.2.0"
 description = "Security scanner for Retrieval-Augmented Generation pipelines — detects prompt injection, metadata poisoning, chunk-splitting exploits, and vector store contamination"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,20 +20,26 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# Runtime dependencies are intentionally minimal: detection is heuristic and
-# explainable (regex families), and numpy only powers the vector-store checker.
+# The base install is standard-library only: detection is heuristic and
+# explainable (regex families). numpy only powers the vector-store checker and
+# ships in the ``vector`` extra.
 # Framework integrations (LangChain, LlamaIndex, ChromaDB) are on the roadmap;
 # when they land they belong in optional extras, not the base install.
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+vector = [
     "numpy>=1.26",
 ]
 
 [dependency-groups]
 dev = [
+    "numpy>=1.26",
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.5.0",
     "mypy>=1.10.0",
+    "jsonschema>=4.21",
 ]
 
 [project.urls]

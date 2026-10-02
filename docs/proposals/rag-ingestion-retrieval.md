@@ -1,8 +1,13 @@
-# Local RAG ingestion and evidence retrieval plan
+# Proposal: local RAG ingestion and evidence retrieval
 
-Status: researched design, not an implemented retrieval system. Prepared 2026-09-27.
-Scope confirmed by the user: mixed PDFs, Word files and Markdown; local-first
-prototype; replaceable parsing, embedding, ranking, search and generation providers.
+> **Status: proposal.** This is a researched design, not an implemented retrieval
+> system, and none of the component names below are current ragguard APIs.
+> Drafted 2026-09-27; it predates the 0.2.0 scanner changes (`scan_chunks`,
+> `assess_embedding_fidelity`, the review floor), which a future implementation
+> should build on.
+
+Scope: mixed PDFs, Word files and Markdown; local-first prototype; replaceable
+parsing, embedding, ranking, search and generation providers.
 
 ## Recommendation
 
@@ -307,9 +312,9 @@ prototype. FTS5 includes BM25; its lower score is better, so the adapter must
 normalize rank direction before fusion. Require a startup FTS5 capability check.
 [SQLite FTS5](https://www.sqlite.org/fts5.html).
 
-Store the writable database and vector artifacts on a local disk outside this
-repository's `/Volumes/obsidian` mount; prior work hit SQLite/filesystem issues
-there. A proposed `RAGGUARD_DATA_DIR` controls location. Verify atomic generation
+Store the writable database and vector artifacts on a local disk rather than a
+network or removable volume, where SQLite locking and atomic renames are less
+reliable. A proposed `RAGGUARD_DATA_DIR` controls location. Verify atomic generation
 publication and crash recovery; do not rely on two unrelated index writes being
 atomic. Small corpora can materialize the authorized vector subset before scoring.
 
@@ -403,18 +408,17 @@ and prove held/oversized evidence cannot reach the generator.
 DeepSeek plugin against complete evidence packets, add cancellation and redacted
 traces, and run an isolated CLI-profile/PTC deployment test. Acceptance: direct,
 nested and cached retrieval preserve caller identity, policy and source lineage.
-No active user profile changes are implied by this planning document.
 
 **Phase 5 — measured optimization.** Evaluate semantic/late chunking, generated
 context, ANN search, multilingual models and structured-table tools only against
 identified baseline failures. Acceptance: a held-out gain with an explicit cost,
 latency and security tradeoff; otherwise retain the simpler implementation.
 
-Suggested parallel ownership during implementation: ingestion/parsing; retrieval/
-ranking; evaluation/fixtures; parent agent for contracts, security integration and
-packaging. Resolve shared record/protocol contracts before parallel coding.
+Suggested workstreams during implementation: ingestion/parsing; retrieval/
+ranking; evaluation/fixtures; contracts, security integration and packaging.
+Resolve shared record/protocol contracts before parallel work starts.
 
 Next concrete deliverable: Phase 0 plus a Markdown-to-index vertical slice, then
-PDF/DOCX parsing against the same fixtures. This research turn adds the plan only;
-it does not install models, ingest private files, run a new retrieval benchmark or
+PDF/DOCX parsing against the same fixtures. This document is a plan only:
+it does not install models, ingest private files, run a retrieval benchmark or
 claim that the proposed pipeline is already implemented.

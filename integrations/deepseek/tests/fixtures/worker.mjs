@@ -7,7 +7,17 @@ if (mode === 'ignore-term') {
 }
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 const verdict = (id) => ({ protocol: 1, id, ok: true, release: true, decision: 'accept', families: [], ruleset_version: 'test', schema_version: '1' });
-if (mode !== 'no-ready') send({ protocol: 1, type: 'ready', ruleset_version: 'test' });
+const ready = { protocol: 1, type: 'ready', ruleset_version: 'test', schema_version: '1', package_version: '0.0.0-test' };
+const { package_version: _omitted, ...readyWithoutPackage } = ready;
+const handshakes = {
+  'no-ready': undefined,
+  'ready-no-package': readyWithoutPackage,
+  'ready-extra': { ...ready, extra: 'unexpected' },
+  'ready-bad-schema': { ...ready, schema_version: 1 },
+  'ready-long-package': { ...ready, package_version: 'x'.repeat(257) },
+};
+const handshake = mode in handshakes ? handshakes[mode] : ready;
+if (handshake) send(handshake);
 let first;
 createInterface({ input: process.stdin }).on('line', (line) => {
   const request = JSON.parse(line);
@@ -24,7 +34,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     case 'review': send({ ...verdict(request.id), decision: 'review' }); break;
     case 'error': send({ protocol: 1, id: request.id, ok: false, release: false, error: 'request_failed' }); break;
     case 'extra': send({ ...verdict(request.id), payload: 'unexpected' }); break;
-    case 'ready-again': send({ protocol: 1, type: 'ready', ruleset_version: 'test' }); break;
+    case 'ready-again': send(ready); break;
+    case 'schema-mismatch': send({ ...verdict(request.id), schema_version: '2' }); break;
     case 'version': send({ ...verdict(request.id), protocol: 2 }); break;
     case 'invalid-utf8': process.stdout.write(Buffer.from([0xff, 10])); break;
     case 'duplicate': send(verdict(request.id)); send(verdict(request.id)); break;

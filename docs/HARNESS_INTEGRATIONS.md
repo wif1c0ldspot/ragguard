@@ -1,6 +1,7 @@
 # Integrating ragguard with agentic harnesses
 
-Integration design checked against official documentation on 2026-09-27. The
+Integration design checked against official documentation on 2026-09-27 and
+updated for ragguard 0.2.0. The
 implemented `ContentBoundary` adapter and `examples/harness_boundary.py` have no
 framework dependency. The DeepSeek Harness bundle below is implemented and tested against its real tool
 registry. Other recipes describe where to call the adapter; they are not claims
@@ -29,10 +30,20 @@ explicitly monitor rather than hold findings, combine
 `RAGPipelineGuard(auto_reject=False)` with `ContentBoundary(guard, allow_review=True)`.
 That setting intentionally allows flagged content through.
 
+Low and info findings (split markers, structural SQL/markup hints) are advisory
+under the default `review_floor="medium"`: they do not hold content, and
+`BoundaryResult.advisory_families` lists them for logging. Use
+`RAGPipelineGuard(review_floor="info")` to hold on every finding, or
+`family_actions` to promote or demote individual families. When the harness needs
+the decision without the release logic, `guard.evaluate(document)` returns a typed
+`DocumentDecision`.
+
 Apply authorization using trusted caller identity first. Scan the complete final
 rendering, including metadata if it will be placed in context. For a retrieved
 batch, keep occurrence identity and rescan the final assembly if concatenation
-can create cross-chunk instructions. Buffer tool-result streams until checked;
+can create cross-chunk instructions; for ordered chunks of one source,
+`RAGScanner().scan_chunks(chunks)` reports injections that span a chunk boundary
+as `split_payload`. Buffer tool-result streams until checked;
 already-streamed text cannot be withdrawn. The adapter only returns document text,
 not a rewritten metadata object or a permission grant.
 
@@ -101,7 +112,7 @@ Claude Code also documents `PostToolUse` output replacement via
 `updatedToolOutput`, with `updatedMCPToolOutput` for MCP. A version-pinned hook can
 scan then replace a held result with a neutral response of the required shape.
 Merely adding a warning is not withholding. Post-tool checks do not undo side
-effects; use pre-tool controls for those. No hook is installed by this change.
+effects; use pre-tool controls for those. This repository does not ship such a hook.
 [Official Claude Code hooks reference](https://code.claude.com/docs/en/hooks).
 
 ## Deployment checks
@@ -115,6 +126,14 @@ effects; use pre-tool controls for those. No hook is installed by this change.
   or assume scanner redaction covers every possible credential format.
 - Pin framework versions, add contract tests for their concrete message shapes,
   and measure latency/false positives using representative data before deployment.
+  `evals/run.py` shows the approach; run it against your own labelled corpus.
+- Record `ruleset_version` and `schema_version` with each decision. Validate
+  report output against `load_schema("report")` in contract tests.
+- Non-Python hosts using `python -m ragguard.worker` should validate the ready
+  handshake (`protocol`, `type`, `ruleset_version`, `schema_version`,
+  `package_version`), check every response against it, and treat any mismatch as
+  a failure that withholds content. `load_schema("worker-protocol")` describes
+  every frame.
 
 ## DeepSeek Harness (implemented)
 
@@ -124,7 +143,9 @@ bundle for the pinned `@deepseek-ai/dsh-tools@0.1.7-rc.2` preview. It checks
 rendered content, canonical values, metadata and added contexts. Native block
 decisions strip held payloads. The process bridge handles bounded framing,
 concurrency, cancellation, restart and disposal without returning raw content
-on operational failure.
+on operational failure. The client validates the worker's versioned handshake,
+fails closed when a response's ruleset or schema version drifts from it, and
+exposes the announced versions as `workerInfo`.
 
 Install the Python package from this checkout and the npm bundle separately,
 then configure an absolute interpreter path. See the bundle README for exact

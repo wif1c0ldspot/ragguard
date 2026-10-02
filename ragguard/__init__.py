@@ -11,12 +11,17 @@ LLM05 (Improper Output Handling), LLM07 (System Prompt Leakage) and
 LLM08 (Vector and Embedding Weaknesses).
 """
 
+from typing import TYPE_CHECKING, Any
+
 from ragguard.boundary import Boundary, BoundaryResult, ContentBlockedError, ContentBoundary
 from ragguard.pipeline import (
     REPORT_SCHEMA_VERSION,
+    BatchDecision,
+    DocumentDecision,
     IngestionDecision,
     IngestionPolicy,
     RAGPipelineGuard,
+    load_schema,
 )
 from ragguard.scanner import (
     RULESET_VERSION,
@@ -29,18 +34,40 @@ from ragguard.scanner import (
     canonicalize,
     resolve_document_id,
 )
-from ragguard.vector_check import VectorAssessment, VectorStoreIntegrityChecker
 
-__version__ = "0.1.1"
+if TYPE_CHECKING:
+    from ragguard.vector_check import VectorAssessment, VectorStoreIntegrityChecker
+
+__version__ = "0.2.0"
+
+# The vector checker needs numpy, which ships in the optional ``vector`` extra.
+# Import it lazily so text scanning and the worker stay standard-library only.
+_VECTOR_EXPORTS = frozenset({"VectorAssessment", "VectorStoreIntegrityChecker"})
+
+
+def __getattr__(name: str) -> Any:
+    if name in _VECTOR_EXPORTS:
+        try:
+            from ragguard import vector_check
+        except ModuleNotFoundError as exc:
+            if exc.name != "numpy":
+                raise
+            raise ImportError(
+                f"ragguard.{name} requires numpy; install the extra: ragguard[vector]"
+            ) from exc
+        return getattr(vector_check, name)
+    raise AttributeError(f"module 'ragguard' has no attribute {name!r}")
 
 __all__ = [
     "REPORT_SCHEMA_VERSION",
     "RULESET_VERSION",
+    "BatchDecision",
     "Boundary",
     "BoundaryResult",
     "ContentBlockedError",
     "ContentBoundary",
     "Document",
+    "DocumentDecision",
     "Finding",
     "FindingType",
     "IngestionDecision",
@@ -52,6 +79,7 @@ __all__ = [
     "VectorAssessment",
     "VectorStoreIntegrityChecker",
     "canonicalize",
+    "load_schema",
     "resolve_document_id",
     "__version__",
 ]

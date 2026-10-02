@@ -10,6 +10,7 @@ import argparse
 import json
 import math
 import sys
+from importlib import metadata
 from typing import Any, BinaryIO, NoReturn, TextIO
 
 from ragguard.boundary import Boundary, ContentBoundary
@@ -17,6 +18,23 @@ from ragguard.pipeline import REPORT_SCHEMA_VERSION, RAGPipelineGuard
 from ragguard.scanner import RULESET_VERSION, Document, RAGScanner
 
 PROTOCOL_VERSION = 1
+_UNKNOWN_PACKAGE_VERSION = "0+unknown"
+
+
+def package_version() -> str:
+    """Installed distribution version, or a sentinel when running from a source tree."""
+    try:
+        return metadata.version("ragguard")
+    except metadata.PackageNotFoundError:
+        return _UNKNOWN_PACKAGE_VERSION
+
+
+def ready_message() -> dict[str, Any]:
+    """Handshake sent once at startup so clients can pin ruleset and schema versions."""
+    return {
+        "protocol": PROTOCOL_VERSION, "type": "ready", "ruleset_version": RULESET_VERSION,
+        "schema_version": REPORT_SCHEMA_VERSION, "package_version": package_version(),
+    }
 
 
 def _invalid_constant(value: str) -> Any:
@@ -110,7 +128,7 @@ def serve(
         sink.write(json.dumps(message, ensure_ascii=True, allow_nan=False) + "\n")
         sink.flush()
 
-    emit({"protocol": PROTOCOL_VERSION, "type": "ready", "ruleset_version": RULESET_VERSION})
+    emit(ready_message())
     while True:
         frame = source.readline(max_frame_bytes + 1)
         if not frame:
@@ -127,7 +145,12 @@ def serve(
         except (ValueError, RecursionError):
             emit(_error(None))
             continue
-        emit(process_request(request, boundary, max_documents=max_documents))
+        try:
+            response = process_request(request, boundary, max_documents=max_documents)
+        except Exception:
+            # process_request already fails closed; this guards against regressions.
+            response = _error(_request_id(request))
+        emit(response)
 
 
 class _Parser(argparse.ArgumentParser):

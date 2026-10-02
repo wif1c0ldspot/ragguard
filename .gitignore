@@ -40,3 +40,6 @@ node_modules/
 
 # node_modules can also appear as a symlink; the trailing-slash rule only matches dirs
 node_modules
+
+# Agent tooling
+.claude/

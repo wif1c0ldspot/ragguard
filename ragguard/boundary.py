@@ -34,6 +34,7 @@ class BoundaryResult:
     review_required: bool
     families: tuple[str, ...]
     released_text: str | None = field(repr=False)
+    advisory_families: tuple[str, ...] = ()
 
     @property
     def released(self) -> bool:
@@ -52,8 +53,9 @@ class ContentBoundary:
     """Withhold rejected and review-required text before context assembly.
 
     ``allow_review=True`` explicitly releases review decisions (for example in
-    a monitored rollout); reject decisions are always withheld. Never catch a
-    scan exception and fall back to the original content.
+    a monitored rollout); reject decisions are always withheld. Findings below
+    the guard's ``review_floor`` are advisory and do not withhold content. Never
+    catch a scan exception and fall back to the original content.
     """
 
     def __init__(
@@ -87,19 +89,19 @@ class ContentBoundary:
             raise TypeError("document.text must be a string")
         if len(text) > self.max_text_chars:
             raise ValueError("content exceeds max_text_chars; refusing partial scanning")
-        report = self.guard.ingest(
-            text, document.metadata, id=document.id, source=document.source,
-        )
-        released = report["accepted"] and (
-            not report["review_required"] or self.allow_review
-        )
+        # Scan the captured text so the released value is exactly what was checked.
+        decision = self.guard.evaluate(Document(
+            text=text, metadata=document.metadata, id=document.id, source=document.source,
+        ))
+        released = decision.accepted and (not decision.review_required or self.allow_review)
         return BoundaryResult(
             boundary=boundary,
-            document_id=report["document_id"],
-            decision=report["decision"],
-            review_required=report["review_required"],
-            families=tuple(sorted({f["family"] for f in report["findings"]})),
+            document_id=decision.document_id,
+            decision=decision.decision.value,
+            review_required=decision.review_required,
+            families=decision.families,
             released_text=text if released else None,
+            advisory_families=decision.advisory_families,
         )
 
     def require(

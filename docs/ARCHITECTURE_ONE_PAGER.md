@@ -7,72 +7,76 @@ results before they enter an agent's context. A clean scan is not proof of safet
 flowchart LR
     A[Uploads / retrieved chunks / tool results] --> B[Harness authorization + rendering]
     B --> C[ContentBoundary]
-    C --> D[RAGPipelineGuard]
+    C --> D[RAGPipelineGuard.evaluate]
     D --> E[RAGScanner]
-    E --> F[Per-call findings + occurrence identity]
-    F --> G[Shared decision policy]
+    E --> F[Findings: family, severity, surface-labelled evidence]
+    F --> G[Policy: family actions, review floor, blocking severities]
     G --> H{accept / review / reject}
     H -->|accept| I[Model context or ingestion]
     H -->|review / reject| J[Withhold / quarantine / human review]
     K[Stored embeddings + documents] --> L[VectorStoreIntegrityChecker]
-    L --> M[Validated, bounded similarity assessment]
+    L --> M[Bounded similarity + re-embedding fidelity]
     M --> J
 ```
 
-**Core:** the scanner canonicalizes text, matches named raw/canonical families,
-walks metadata fields, and returns findings with redacted evidence, family,
-severity and location. State belongs to each scan. Full-text fingerprints identify
-content; input occurrence indices correlate findings without merging equal text.
+**Core:** the scanner prepares each text once into canonical, deobfuscated
+(look-alikes, letter spacing, leetspeak), raw and bounded base64/hex-decoded
+surfaces, matches 19 named families, walks metadata fields, and returns frozen
+findings with redacted, surface-labelled evidence. `scan_chunks()` also catches
+injections split across adjacent chunk boundaries. Base install is standard-library
+only; numpy is an optional extra for vector checks.
 
-**Policy:** the pipeline applies the same configurable decision policy to single
-and batch ingestion. Monitoring reports findings without rejecting them;
-enforcement rejects configured risks. `ContentBoundary.require()` and
-`arequire()` release text only after policy allows it, holding review by default.
-Scanner errors and oversized inputs propagate instead of releasing unchecked text.
+**Policy:** one immutable policy serves typed (`evaluate`, `evaluate_batch`) and
+dictionary (`ingest`, `batch_ingest`) callers. Findings below the review floor
+(medium by default) are advisory — reported, listed in `advisory_families`, but
+accepted. Monitoring reports findings without rejecting; enforcement rejects
+critical/high. `ContentBoundary` releases text only after policy allows it,
+holding review by default. Errors and oversized inputs never release text.
 
-**Vector assessment:** a separate, caller-invoked API validates embeddings,
-bounds comparisons and reports coverage and document pairs. Similarity is an
-anomaly signal, not proof of poisoning or tenant leakage. Retrieval authorization
-must be tested against actual identities, entitlements and returned documents.
+**Contracts:** reports carry `schema_version` 1.1 and `ruleset_version`; JSON
+Schemas for reports and the worker protocol ship with the package
+(`load_schema`). The worker's ready handshake announces ruleset, schema and
+package versions, and clients fail closed on drift.
+
+**Vector assessment:** a separate, caller-invoked API. Cosine-high/text-low pairs
+and cross-user proximity are medium heuristics; re-embedding with the same model
+(`assess_embedding_fidelity`) is the high-confidence tampering signal. None of
+these establish tenant isolation; test retrieval against real entitlements.
 
 **Harness integration:** wrap an OpenAI function tool; intercept LangChain tool
 results or a LangGraph retrieval node; postprocess LlamaIndex nodes; check inside
-CrewAI custom tools or Google ADK callbacks; guard the server implementation of
-an MCP retrieval tool for Codex/Claude. These are integration designs; only the
-framework-neutral adapter and local example are executed by this repository's tests.
+CrewAI tools or Google ADK callbacks; guard an MCP retrieval server. These are
+designs; the framework-neutral adapter, local example and DeepSeek bundle are tested.
 
-**Trust boundary:** authorize access before retrieval/return, scan the exact
-rendered text before prompt assembly, and prevent held content from entering
-history, memory or streaming output. Tool argument authorization must happen
-before side effects; scanning a result cannot undo execution. The host owns ACLs,
-credentials, approvals, sandboxing, egress restrictions and output validation.
+**Trust boundary:** authorize before retrieval, scan the exact rendered text before
+prompt assembly, and keep held content out of history, memory and streams. Scanning
+a result cannot undo a tool's side effects. The host owns ACLs, credentials,
+approvals, sandboxing, egress and output validation.
 
-**Operational contract:** log decision, boundary, rule/report version, families
-and caller-owned correlation IDs; avoid logging document text or credentials.
-Budget document sizes and vector workloads. Roll out with representative benign
-and attack corpora; calibrate per-family policy before enabling automatic rejection.
+**Measured, not assumed:** `evals/` runs a synthetic corpus in CI. Ruleset
+2026.10.1 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
+multilingual and task-phrased exfiltration attacks are at 0%. Calibrate per-family
+policy on your own corpus before enabling automatic rejection.
 
-**Design tradeoff:** small deterministic rules are cheap and auditable, but miss
-novel phrasing and can flag benign technical material. Native adapters, measured
-precision/recall, real entitlement probes and production load testing remain
-deployment-specific follow-on work.
+**Design tradeoff:** small deterministic rules are cheap (sub-millisecond p95) and
+auditable, but miss novel phrasing and can flag benign technical material. A
+model-based detector tier, a data-driven rule pack and chunk-aware pipeline entry
+points are roadmap items.
 
-See [integration recipes and official sources](HARNESS_INTEGRATIONS.md),
-[implementation plan](IMPROVEMENT_PLAN.md), and [full architecture](ARCHITECTURE.md).
+See [integration recipes](HARNESS_INTEGRATIONS.md), the
+[full architecture](ARCHITECTURE.md) and the [evaluation corpus](../evals/README.md).
 
 ### Implemented DeepSeek adapter
 
 The [DeepSeek bundle](../integrations/deepseek/README.md) attaches to
-`tools/post-execute` and sends bounded extracted result projections to
-`python -m ragguard.worker` over private JSON Lines. A persistent worker keeps
-Python startup off the steady-state path. The TypeScript client correlates
-concurrent requests and retires failed processes; errors withhold results.
-Native block decisions remove canonical values as well as rendered content.
-This adapter targets the pinned 0.1.7-rc.2 tools API. Post-hook tool finalizers
-and trusted middleware remain outside its enforcement boundary.
+`tools/post-execute` and sends bounded result projections to a persistent
+`python -m ragguard.worker` over private JSON Lines. The TypeScript client checks
+the versioned handshake, fails closed on version drift, correlates concurrent requests and retires
+failed processes; every error withholds the result. It targets the pinned
+0.1.7-rc.2 tools API; tool finalizers and trusted middleware remain outside it.
 
 ### Proposed ingestion and retrieval extension
 
-The [local RAG plan](RAG_INGESTION_RETRIEVAL_PLAN.md) adds mixed-document parsing,
-structural child/parent chunks, hybrid retrieval, reranking and evidence assembly
-around the existing guard. It is a researched proposal, not a shipped retriever.
+The [RAG ingestion and retrieval proposal](proposals/rag-ingestion-retrieval.md)
+adds parsing, parent/child chunks, hybrid retrieval and evidence assembly around
+the guard. It is a proposal, not a shipped retriever.

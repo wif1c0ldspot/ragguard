@@ -19,6 +19,9 @@ DeepSeek tool execution (including nested registry dispatch)
 No model API key or network service is needed for scanning. The Python package
 and this npm bundle are separate installations. The worker returns decisions,
 family names and ruleset/schema versions; it never echoes documents or evidence.
+The worker scans with ragguard's default policy: findings below the `medium`
+review floor (split markers, structural hints) are advisory and do not hold a
+result.
 The client does not forward worker stderr into harness logs.
 
 The policy holds both `review` and `reject` by default. Text extraction checks
@@ -29,6 +32,50 @@ so later mutations cannot replace checked content. It conservatively blocks any
 downstream canonical-value replacement because the host renders that value after
 this hook. A block removes the original canonical value, metadata and deferred
 contexts through the host's native block contract.
+
+## Worker handshake and version pinning
+
+On startup the worker writes exactly one ready frame before any response:
+
+```json
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.1", "schema_version": "1.1", "package_version": "0.2.0"}
+```
+
+The client accepts the handshake only if it has exactly these five keys, `protocol`
+is `1`, `type` is `ready` and the three version fields are non-empty strings of at
+most 256 characters. Requests queued during startup are sent only after a valid
+handshake. Every later response must repeat the handshake's `ruleset_version` and
+`schema_version`; a missing, malformed or drifting version is a protocol failure,
+which retires the worker and holds every pending check. A worker from ragguard
+0.1.x (three-key handshake) is therefore refused rather than trusted.
+
+`WorkerClient.workerInfo` (in `src/worker-client.ts`) exposes the announced
+versions as a frozen `{ rulesetVersion, schemaVersion, packageVersion }` object, or
+`undefined` until a worker is ready (and again after it is retired). The Cordis
+plugin entry point does not re-export `WorkerClient` or log these versions yet;
+code that embeds the client directly can record them with each decision so audits
+tie every verdict to a ruleset. `packageVersion` is `0+unknown` when the
+interpreter runs ragguard from an uninstalled source tree; install the package
+into the configured environment so the version is meaningful.
+
+## Security invariants
+
+The policy and bridge are built and tested to hold these properties:
+
+- Clean text and canonical values pass unchanged; held values, metadata and
+  additional contexts never reach the final tool result.
+- Review is withheld by default; releasing it requires explicit `monitor` mode.
+- Timeouts, malformed or oversized frames, version drift, worker exits and
+  cancellation never fall back to raw content. Unloading the plugin removes its
+  listeners and terminates the owned process.
+- Parallel calls stay correlated, and a cancelled call cannot consume another
+  call's reply. A failed process is retired before a replacement starts.
+- Structured programmatic results are checked, not just rendered text, and nested
+  tool calls use the same policy attachment.
+- A downstream policy replacement cannot insert an unchecked value; existing block
+  decisions remain blocks.
+- Worker responses carry decisions, family names and versions only, never scanned
+  text or evidence.
 
 ## Build and install from this repository
 
@@ -129,6 +176,18 @@ Vector-store assessment remains an offline operation.
 The real-registry tests cover native execution and nested registry dispatch;
 they do not constitute a full CLI/profile installation or live-model/PTC sandbox
 end-to-end test.
+
+Known gaps worth closing before production use:
+
+- Test installation into an isolated CLI profile, real PTC sandbox calls, scope
+  inheritance and plugin ordering, and audit post-hook finalizers and middleware.
+- There is no opt-in redacted event sink yet for decisions, families, latency,
+  timeouts and restarts; monitor mode releases findings without telemetry.
+- Multiple result projections count toward resource limits, and one cancellation
+  retires the shared worker and holds other pending calls. Measure that
+  availability tradeoff before considering a worker pool.
+- Multimodal extraction and a session-level check for instructions split across
+  separate tool results are application responsibilities today.
 
 ## Host references
 
