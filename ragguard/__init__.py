@@ -11,8 +11,15 @@ LLM05 (Improper Output Handling), LLM07 (System Prompt Leakage) and
 LLM08 (Vector and Embedding Weaknesses).
 """
 
-from ragguard.pipeline import RAGPipelineGuard
+from ragguard.boundary import Boundary, BoundaryResult, ContentBlockedError, ContentBoundary
+from ragguard.pipeline import (
+    REPORT_SCHEMA_VERSION,
+    IngestionDecision,
+    IngestionPolicy,
+    RAGPipelineGuard,
+)
 from ragguard.scanner import (
+    RULESET_VERSION,
     Document,
     Finding,
     FindingType,
@@ -22,18 +29,27 @@ from ragguard.scanner import (
     canonicalize,
     resolve_document_id,
 )
-from ragguard.vector_check import VectorStoreIntegrityChecker
+from ragguard.vector_check import VectorAssessment, VectorStoreIntegrityChecker
 
 __version__ = "0.1.1"
 
 __all__ = [
+    "REPORT_SCHEMA_VERSION",
+    "RULESET_VERSION",
+    "Boundary",
+    "BoundaryResult",
+    "ContentBlockedError",
+    "ContentBoundary",
     "Document",
     "Finding",
     "FindingType",
+    "IngestionDecision",
+    "IngestionPolicy",
     "RAGPipelineGuard",
     "RAGScanner",
     "ScanReport",
     "Severity",
+    "VectorAssessment",
     "VectorStoreIntegrityChecker",
     "canonicalize",
     "resolve_document_id",

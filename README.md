@@ -2,11 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Tests: 33 passing](https://img.shields.io/badge/Tests-33%20passing-brightgreen)](tests/)
+[Tests and regression suite](tests/)
 
 **ragguard** is a security scanner for Retrieval-Augmented Generation (RAG) pipelines. It
 detects prompt injection via poisoned documents, metadata injection, chunk-splitting and
-structural exploits, embedding poisoning, and cross-user contamination in shared vector stores.
+structural exploits, embedding poisoning, and cross-user proximity anomalies in shared vector stores.
 
 Findings map to the **OWASP Top 10 for LLM Applications 2025** — primarily LLM01 (Prompt
 Injection), LLM02 (Sensitive Information Disclosure), LLM05 (Improper Output Handling),
@@ -22,30 +22,23 @@ See [Known limitations](#known-limitations) for what that does and does not buy 
 
 There are unrelated projects and packages using similar names — `raguard`/`RAGGuard` on PyPI and
 GitHub (permission-aware retrieval, context-leakage middleware). **This project is independent of
-them**: it targets check-time scanning of ingested documents plus vector-store integrity, and its
+them**: it targets check-time scanning of ingested documents plus vector-store anomaly assessment, and its
 detection families, module layout and tests are self-contained here.
 
 ragguard is **not published to PyPI** — the `ragguard` name there belongs to another author's
 package, so `pip install ragguard` would install their code. Install from source.
 
-## The Problem
+## Scope
 
-RAG systems added an attack surface that generic LLM security tooling does not cover: the corpus
-itself is attacker-reachable, and retrieved text enters the context window as if it were trusted.
-
-| Attack Vector | Existing Tools | ragguard |
-|--------------|----------------|----------|
-| Direct prompt injection | llm-guard, promptfoo, garak | ✅ (instruction/persona families) |
-| Indirect injection via document content | Partial | ✅ full-body scan on canonicalised text |
-| Metadata injection (tool calls, code exec) | ❌ | ✅ 5 metadata families |
-| Chunk-splitting exploits across boundaries | ❌ | ✅ structural markers |
-| Embedding poisoning of vector stores | ❌ | ✅ cosine-vs-text divergence |
-| Cross-user contamination in shared stores | ❌ | ✅ per-user cluster proximity |
-| Canonical bypass (encoding tricks) | Partial | ✅ entity decode + NFKC + zero-width strip |
+ragguard scans document content and metadata before ingestion or context assembly,
+and separately assesses vector similarity anomalies. It uses explainable heuristics;
+findings are review signals, and a clean report is not a safety guarantee. The host
+must enforce authorization, tool permissions, output validation and scan decisions.
 
 ## Architecture
 
-See the full [architecture document](docs/ARCHITECTURE.md).
+See the [architecture one-pager](docs/ARCHITECTURE_ONE_PAGER.md),
+[full architecture](docs/ARCHITECTURE.md), and [agentic harness integration guide](docs/HARNESS_INTEGRATIONS.md).
 
 ```
 Document ──▶ canonicalize()  (html.unescape → NFKC → strip zero-width → collapse ws → lower)
@@ -109,7 +102,7 @@ for finding in result["findings"]:
 # critical metadata_code_execution LLM01: Prompt Injection
 ```
 
-`documents` in a `Document` may omit `id` — the scanner derives a stable content hash. Always
+A `Document` may omit `id` — the scanner derives a full-text content fingerprint. Batch findings correlate by input occurrence, not the fingerprint. Always
 correlate findings with `resolve_document_id(doc)` rather than slicing the text yourself.
 
 ## What it detects
@@ -125,7 +118,7 @@ correlate findings with `resolve_document_id(doc)` rather than slicing the text 
 | Structural risks | `structural_dangerous_tag`, `structural_sql_keyword` | medium / low | **LLM05** |
 | Canonical bypass | `canonical_override_plus_action` | critical | LLM01 |
 | Embedding poisoning | `embedding_poisoning_cos_high_text_low` | high | **LLM08** (also LLM04) |
-| Cross-user contamination | `cross_user_embedding_proximity` | critical | **LLM08** (also LLM02) |
+| Cross-user proximity anomaly | `cross_user_embedding_proximity` | medium | **LLM08** (also LLM02) |
 
 ## Usage
 
@@ -169,7 +162,7 @@ print(result["clean"])          # False
 for doc in result["documents"]:
     print(doc["id"], doc["accepted"], doc["findings_count"], doc["families"])
 # doc-1 True  0 []
-# doc-2 False 1 ['instruction_override']
+# doc-2 True  1 ['instruction_override']
 ```
 
 ### Vector store integrity
@@ -185,12 +178,39 @@ poisoned = checker.check_embedding_consistency([
     Document(id="b", text="Totally unrelated payload text.",     embedding=[1.0, 0.0001, 0.0]),
 ])
 
-# Cross-user contamination in a shared index
+# Cross-user proximity anomaly in a shared index (not proof of leakage)
 contamination = checker.check_cross_user_contamination({
     "user_a": [Document(text="Private payroll data.", embedding=[0.1, 0.2, 0.3])],
     "user_b": [Document(text="Unrelated weather notes.", embedding=[0.11, 0.19, 0.3])],
 })
 ```
+
+### Guard an agent's context boundary
+
+```python
+from ragguard import Boundary, ContentBoundary, ContentBlockedError, Document
+
+gate = ContentBoundary()  # enforce; hold review decisions by default
+try:
+    checked_text = gate.require(
+        Document(id="tool-result-1", text="Retrieved content..."),
+        boundary=Boundary.TOOL_OUTPUT,
+    )
+    # Only checked_text may now enter model context.
+except ContentBlockedError:
+    pass  # abort or route to review; never return the original payload
+```
+
+Async callers use `await gate.arequire(document)`. See the
+[executable example](examples/harness_boundary.py) and the
+[harness integration guide](docs/HARNESS_INTEGRATIONS.md) for OpenAI, LangChain,
+LlamaIndex, CrewAI, Google ADK and MCP/Codex/Claude boundaries. Framework-specific
+recipes are guidance; the framework-neutral adapter is implemented and tested.
+
+Single and batch ingestion now share policy: with `auto_reject=False`, flagged
+content remains accepted with `decision="review"` and `review_required=True`.
+`ContentBoundary` holds that review unless `allow_review=True` is explicitly set.
+Fallback IDs changed to hash full text; migrate old persisted IDs or supply source IDs.
 
 ### Export a report
 
@@ -223,7 +243,7 @@ canonicalize("&#x49;gnore\u200b  PREVIOUS")   # 'ignore previous'
 - **Vector checks need embeddings** and assume one shared space per store; they flag proximity, not
   proven exfiltration.
 - **Some families are deliberately broad** (a document telling readers to "ignore earlier rules"
-  will fire `instruction_override`). Tune by removing families, not by weakening the regexes.
+  will fire `instruction_override`). Configure `enabled_families` and pipeline `family_actions` using representative benign data.
 
 ## Extending
 
@@ -247,30 +267,24 @@ carry the family name, severity and OWASP mapping into reports and exports.
 ## Testing
 
 ```bash
-uv run pytest                       # 33 tests
+uv run pytest                       # regression suite
 uv run pytest --cov=ragguard        # with coverage
 uv run ruff check .                 # lint (whole repo)
 uv run mypy ragguard                # type check
 uv run python examples/document_poisoning_demos.py   # 7 attack demos
 ```
 
-```
-$ uv run pytest
-.................................                                        [100%]
-33 passed in 0.05s
-```
-
 Test coverage is grouped by intent:
 
 - `tests/test_scanner.py` — detection families, obfuscation/canonicalisation, false-positive guards
 - `tests/test_pipeline.py` — accept/review/reject decisions, batch correlation, JSON export
-- `tests/test_vector_check.py` — embedding poisoning, cross-user contamination, negatives
+- `tests/test_vector_check.py` — embedding anomalies, cross-user proximity, invalid inputs and budgets
 
 ## Attack demonstrations
 
 `examples/document_poisoning_demos.py` runs seven end-to-end demonstrations: indirect prompt
 injection, metadata tool-call hijacking, chunk-splitting, canonical/encoding bypass, embedding
-poisoning, cross-user contamination and pipeline integration — each showing the payload, the
+anomalies, cross-user proximity and pipeline integration — each showing the payload, the
 findings, and the remediation text.
 
 ## Roadmap
@@ -289,3 +303,13 @@ See [CHANGELOG.md](CHANGELOG.md).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### DeepSeek Harness plugin
+
+An implemented [Cordis bundle](integrations/deepseek/README.md) scans tool results
+through a local Python worker. It targets the pinned DeepSeek Harness tools
+`0.1.7-rc.2` preview, with enforcement, bounded process communication and real
+tool-registry tests. See its README for installation and coverage limits.
+
+For the proposed local-first ingestion, chunking, ranking and evaluation pipeline,
+see the [RAG research and build plan](docs/RAG_INGESTION_RETRIEVAL_PLAN.md).

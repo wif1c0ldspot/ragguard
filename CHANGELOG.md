@@ -3,6 +3,38 @@
 All notable changes to ragguard. Format: keep-a-changelog; versions follow the package version in
 `pyproject.toml`.
 
+## [Unreleased]
+
+### Changed
+
+- DeepSeek result extraction checks split text blocks and composed context;
+  downstream decisions are snapshotted before asynchronous verification. Worker
+  deadlines and cancellation now include process-retirement waits.
+
+- Scanner findings are local to each call, with occurrence indices for reliable
+  batch correlation. Generated IDs now hash the entire text; persisted fallback
+  IDs from 0.1.1 must be migrated or replaced with explicit source IDs.
+- Single and batch ingestion share a configurable policy. Monitoring mode now
+  consistently returns review instead of rejecting batch entries. Duplicate
+  explicit IDs in a batch are rejected. Finding/report metadata is versioned.
+- Structured metadata scanning, case-insensitive markup checks, preserved Unicode
+  whitespace, redacted credential evidence, and configurable detector families.
+- Vector checks validate inputs, enforce resource budgets, retain pair evidence
+  and expose assessment coverage. Cross-user proximity is medium/advisory and
+  excludes near-duplicate text; it no longer claims proven contamination.
+- Unused scanner and vector options issue deprecation warnings when supplied.
+
+### Added
+
+- DeepSeek Harness Cordis bundle pinned to tools `0.1.7-rc.2`, with a persistent
+  Python worker, bounded subprocess client, post-execution result policy,
+  real-registry integration tests and installation documentation.
+- `ContentBoundary`, typed decision summaries, sync/async release methods, and
+  `ContentBlockedError` for framework-neutral harness enforcement. Review content
+  is held by default; monitoring release requires an explicit option.
+- Regression tests, a harness-boundary demonstration, corrected Python CI matrix,
+  architecture one-pager, integration recipes and implementation plan.
+
 ## [0.1.1] — 2026-09-27
 
 ### Fixed

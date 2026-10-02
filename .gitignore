@@ -12,6 +12,8 @@ dist/
 
 # Virtual environments
 .venv/
+.venv-review-cache/
+.venv-dsh/
 venv/
 env/
 
@@ -31,3 +33,7 @@ env/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# DeepSeek plugin development
+node_modules/
+*.tgz

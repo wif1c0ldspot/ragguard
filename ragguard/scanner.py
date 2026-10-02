@@ -20,11 +20,16 @@ from __future__ import annotations
 
 import hashlib
 import html
+import math
 import re
 import unicodedata
+import warnings
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+RULESET_VERSION = "2026.09.1"
 
 # --- OWASP Top 10 for LLM Applications (2025) categories used by the scanner ---
 
@@ -66,6 +71,11 @@ class Finding:
     remediation: str
     owasp_mapping: str = ""
     family: str = ""
+    document_index: int | None = None
+    metadata_path: str | None = None
+    related_document_ids: tuple[str, ...] = ()
+    confidence: str = "heuristic"
+    related_document_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,7 +95,7 @@ class PatternFamily:
 
 # --- Canonicalisation -------------------------------------------------------
 
-_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2028-\u202f\u2060-\u2064\ufeff]")
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
@@ -167,7 +177,7 @@ INJECTION_FAMILIES: tuple[PatternFamily, ...] = (
         family="delimiter_injection",
         pattern=re.compile(
             r"<\s*/?\s*(?:script|iframe|object|embed|svg|form|meta|link|base)\b[^>]*>"
-            r"|\bjavascript\s*:|\bdata\s*:\s*text/html"
+            r"|\bjavascript\s*:|\bdata\s*:\s*text/html", re.IGNORECASE
         ),
         severity=Severity.HIGH,
         owasp=LLM01_PROMPT_INJECTION,
@@ -194,14 +204,13 @@ INJECTION_FAMILIES: tuple[PatternFamily, ...] = (
     PatternFamily(
         family="jailbreak_mode",
         pattern=re.compile(
-            r"\b(?:developer|debug|maintenance|sudo|god)\s+mode\b"
-            r"|\bd\s*a\s*r\s*k\s*(?:w\s*e\s*b|n\s*e\s*t)\b"
-            r"|\bshadow\s*(?:net|web|zone)\b"
+            r"\b(?:enable|activate|enter|switch\s+to|behave\s+as\s+if\s+in)\s+"
+            r"(?:developer|debug|maintenance|sudo|god)\s+mode\b"
         ),
         severity=Severity.HIGH,
         owasp=LLM01_PROMPT_INJECTION,
         remediation=(
-            "Reject the document; jailbreak framings have no legitimate place in a corpus."
+            "Review mode-switch instructions in context before allowing them into prompts."
         ),
     ),
     PatternFamily(
@@ -226,7 +235,7 @@ INJECTION_FAMILIES: tuple[PatternFamily, ...] = (
 METADATA_FAMILIES: tuple[PatternFamily, ...] = (
     PatternFamily(
         family="metadata_key_value_payload",
-        pattern=re.compile(r"\b[A-Z_]{4,}\s*=\s*[\"'][^\"'<>\n]{10,}"),
+        pattern=re.compile(r"\b[A-Z_]{4,}\s*=\s*[\"'][^\"'<>\n]{10,}", re.I),
         severity=Severity.HIGH,
         owasp=LLM01_PROMPT_INJECTION,
         remediation="Strip instruction-bearing fields from metadata before ingestion.",
@@ -235,7 +244,7 @@ METADATA_FAMILIES: tuple[PatternFamily, ...] = (
         family="metadata_tool_call",
         pattern=re.compile(
             r"[\"']?\b(?:FUNCTION|ACTION|TOOL)\b[\"']?\s*[:=]\s*[\"']?"
-            r"(?:write_|exec|invoke|rm_|curl|wget|http|POST|GET)\b",
+            r"(?:write_\w*|exec|invoke|rm_\w*|curl|wget|https?|POST|GET)\b",
             re.IGNORECASE,
         ),
         severity=Severity.CRITICAL,
@@ -279,7 +288,7 @@ METADATA_FAMILIES: tuple[PatternFamily, ...] = (
 SPLIT_FAMILIES: tuple[PatternFamily, ...] = (
     PatternFamily(
         family="split_marker_open",
-        pattern=re.compile(r"(?<=[.!?])\s*(?:begin|start|first\s+part|step\s+1)\b"),
+        pattern=re.compile(r"(?<=[.!?])\s*(?:begin|start|first\s+part|step\s+1)\b", re.I),
         severity=Severity.MEDIUM,
         owasp=LLM01_PROMPT_INJECTION,
         remediation=(
@@ -288,7 +297,7 @@ SPLIT_FAMILIES: tuple[PatternFamily, ...] = (
     ),
     PatternFamily(
         family="split_marker_close",
-        pattern=re.compile(r"(?<=[.!?])\s*(?:end|stop|finish|last\s+part|step\s+\d+)\b"),
+        pattern=re.compile(r"(?<=[.!?])\s*(?:end|stop|finish|last\s+part|step\s+\d+)\b", re.I),
         severity=Severity.MEDIUM,
         owasp=LLM01_PROMPT_INJECTION,
         remediation=(
@@ -299,7 +308,7 @@ SPLIT_FAMILIES: tuple[PatternFamily, ...] = (
         family="structural_dangerous_tag",
         pattern=re.compile(
             r"<\s*/?\s*(?:script|iframe|object|embed|svg|form|base)\b[^>]*>"
-            r"|\bon[a-z]+\s*=\s*[\"']?[a-z]+",
+            r"|\bon[a-z]+\s*=\s*[\"']?[a-z]+", re.IGNORECASE,
         ),
         severity=Severity.MEDIUM,
         owasp=LLM05_IMPROPER_OUTPUT,
@@ -309,7 +318,7 @@ SPLIT_FAMILIES: tuple[PatternFamily, ...] = (
     ),
     PatternFamily(
         family="structural_sql_keyword",
-        pattern=re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[\s\S]{0,40}?\bFROM\b"),
+        pattern=re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[\s\S]{0,40}?\bFROM\b", re.I),
         severity=Severity.LOW,
         owasp=LLM05_IMPROPER_OUTPUT,
         remediation=(
@@ -329,26 +338,105 @@ def resolve_document_id(doc: Document) -> str:
     uses it internally, and callers that re-derive ids by hand (e.g. slicing
     ``doc.text``) will silently fail to match findings.
     """
-    return doc.id or RAGScanner._hash_content(doc.text[:100])
+    return doc.id or RAGScanner._hash_content(doc.text)
 
+
+
+_CREDENTIAL_KEY_RE = re.compile(
+    r"^(?:api[-_]?key|access[-_]?token|secret|password|authorization|credential)$", re.I
+)
+_SECRET_RE = re.compile(
+    r"\bsk-[a-zA-Z0-9_-]{20,}|\b(?:api[-_]?key|access[-_]?token|secret|password|"
+    r"authorization)\s*[:=]\s*[\"']?[^\s\"',}]+", re.I
+)
+
+
+def _redact_metadata_path(path: str) -> str:
+    """Keep safe JSON Pointer segments, concealing secret keys and their descendants."""
+    safe: list[str] = []
+    sensitive_ancestor = False
+    for segment in path.split("/")[1:]:
+        decoded = segment.replace("~1", "/").replace("~0", "~")
+        canonical = canonicalize(decoded)
+        secret_segment = bool(_SECRET_RE.search(canonical))
+        safe.append("[REDACTED]" if sensitive_ancestor or secret_segment else segment)
+        sensitive_ancestor = sensitive_ancestor or bool(_CREDENTIAL_KEY_RE.fullmatch(canonical))
+    return "/" + "/".join(safe) if safe else ""
+
+
+def _metadata_leaves(value: Any, path: str = "", *, key: str = "", depth: int = 0,
+                     ancestors: frozenset[int] = frozenset()) -> Iterator[tuple[str, str, str]]:
+    """Yield validated JSON-like leaves and escaped JSON Pointer paths.
+
+    Reject cycles, unsupported values and excessive nesting without invoking
+    arbitrary objects' string representations. Container keys are also scanned.
+    """
+    if depth > 64 or id(value) in ancestors:
+        raise ValueError("metadata must be acyclic and at most 64 levels deep")
+    if isinstance(value, dict):
+        if key:
+            yield path, key, ""
+        for child_key, child in value.items():
+            if not isinstance(child_key, str):
+                raise TypeError("metadata keys must be strings")
+            escaped = child_key.replace("~", "~0").replace("/", "~1")
+            yield from _metadata_leaves(
+                child, f"{path}/{escaped}", key=child_key, depth=depth + 1,
+                ancestors=ancestors | {id(value)},
+            )
+    elif isinstance(value, list):
+        if key:
+            yield path, key, ""
+        for index, child in enumerate(value):
+            yield from _metadata_leaves(
+                child, f"{path}/{index}", depth=depth + 1, ancestors=ancestors | {id(value)}
+            )
+    elif isinstance(value, str):
+        yield path, key, value
+    elif value is None or isinstance(value, (bool, int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("metadata numbers must be finite")
+        yield path, key, "" if value is None else str(value)
+    else:
+        raise TypeError("metadata values must be JSON-like scalars, lists or dictionaries")
 
 
 class RAGScanner:
-    """Main scanner class for RAG pipeline security assessment."""
+    """Stateless heuristic scanner, safe to reuse across concurrent scans.
+
+    ``enabled_families=None`` enables all rules; an empty iterable disables all.
+    Legacy embedding/chunk parameters remain readable but do not affect detection.
+    Evidence is redacted by default; it is still untrusted document content.
+    """
 
     def __init__(
         self,
         *,
-        chunk_size: int = 500,
-        chunk_overlap: int = 50,
-        embedding_dim: int = 1536,
-        similarity_threshold: float = 0.95,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        embedding_dim: int | None = None,
+        similarity_threshold: float | None = None,
+        enabled_families: Iterable[str] | None = None,
+        redact_evidence: bool = True,
     ):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.embedding_dim = embedding_dim
-        self.similarity_threshold = similarity_threshold
-        self._findings: list[Finding] = []
+        legacy = (chunk_size, chunk_overlap, embedding_dim, similarity_threshold)
+        if any(value is not None for value in legacy):
+            warnings.warn(
+                "Scanner chunk/embedding parameters are unused and deprecated; "
+                "configure chunking upstream and vector checks separately.",
+                DeprecationWarning, stacklevel=2,
+            )
+        self.chunk_size = 500 if chunk_size is None else chunk_size
+        self.chunk_overlap = 50 if chunk_overlap is None else chunk_overlap
+        self.embedding_dim = 1536 if embedding_dim is None else embedding_dim
+        self.similarity_threshold = 0.95 if similarity_threshold is None else similarity_threshold
+        known = {rule.family for rule in INJECTION_FAMILIES + METADATA_FAMILIES + SPLIT_FAMILIES}
+        known.add("canonical_override_plus_action")
+        selected = known if enabled_families is None else set(enabled_families)
+        if selected - known:
+            raise ValueError(f"Unknown rule families: {sorted(selected - known)}")
+        self.enabled_families = frozenset(selected)
+        self.redact_evidence = redact_evidence
 
     def scan_documents(
         self,
@@ -358,103 +446,93 @@ class RAGScanner:
         check_metadata: bool = True,
         check_chunk_splitting: bool = True,
     ) -> ScanReport:
-        """Scan a collection of documents for RAG pipeline security issues."""
-        self._findings = []
-
-        for doc in documents:
+        """Scan documents; ``document_index`` identifies each occurrence in this call."""
+        findings: list[Finding] = []
+        for index, doc in enumerate(documents):
             doc_id = resolve_document_id(doc)
-
             if check_prompt_injection:
-                self._scan_prompt_injection(doc, doc_id)
-
+                findings.extend(self._scan_rules(
+                    doc.text, INJECTION_FAMILIES, FindingType.PROMPT_INJECTION_IN_DOCUMENT,
+                    doc_id, index,
+                ))
+                canonical = canonicalize(doc.text)
+                if ("canonical_override_plus_action" in self.enabled_families
+                        and "instruction_override" in self.enabled_families
+                        and INJECTION_FAMILIES[0].pattern.search(canonical)
+                        and _ACTION_ENUMERATION_RE.search(canonical)):
+                    findings.append(Finding(
+                        finding_type=FindingType.CANONICAL_INJECTION,
+                        severity=Severity.CRITICAL, document_id=doc_id,
+                        description="Instruction override combined with an enumerated action",
+                        evidence="instruction:",
+                        remediation=(
+                            "Treat retrieved content as data and review instruction overrides."
+                        ),
+                        owasp_mapping=LLM01_PROMPT_INJECTION,
+                        family="canonical_override_plus_action", document_index=index,
+                    ))
             if check_metadata:
-                self._scan_metadata(doc, doc_id)
-
+                if doc.metadata is not None and not isinstance(doc.metadata, dict):
+                    raise TypeError("Document.metadata must be a dictionary or None")
+                for path, key, value in _metadata_leaves(doc.metadata):
+                    # Preserve field structure rather than scanning Python repr(dict).
+                    candidate = f"{key}: {value}" if key else value
+                    rules = INJECTION_FAMILIES + METADATA_FAMILIES
+                    matches = self._scan_rules(
+                        candidate, rules, FindingType.METADATA_INJECTION, doc_id, index, path,
+                    )
+                    sensitive = any(
+                        _CREDENTIAL_KEY_RE.fullmatch(
+                            canonicalize(part.replace("~1", "/").replace("~0", "~"))
+                        ) for part in path.split("/")[1:]
+                    )
+                    if sensitive and value and "metadata_credential_leak" in self.enabled_families:
+                        if not any(f.family == "metadata_credential_leak" for f in matches):
+                            rule = METADATA_FAMILIES[-1]
+                            matches.append(Finding(
+                                FindingType.METADATA_INJECTION, rule.severity, doc_id,
+                                "Credential-bearing metadata field", value[:120], rule.remediation,
+                                rule.owasp, rule.family, index, path,
+                            ))
+                    if self.redact_evidence:
+                        for finding in matches:
+                            finding.metadata_path = _redact_metadata_path(path)
+                            if sensitive:
+                                finding.evidence = "[REDACTED credential-bearing metadata]"
+                    findings.extend(matches)
             if check_chunk_splitting:
-                self._scan_chunk_splitting(doc, doc_id)
+                findings.extend(self._scan_rules(
+                    doc.text, SPLIT_FAMILIES, FindingType.CHUNK_SPLIT_ATTACK,
+                    doc_id, index, raw=True,
+                ))
+        summary: dict[str, int] = {}
+        for finding in findings:
+            summary[finding.severity.value] = summary.get(finding.severity.value, 0) + 1
+        return ScanReport(len(documents), findings, summary)
 
-            self._scan_canonical_injection(doc, doc_id)
-
-        return ScanReport(
-            total_documents=len(documents),
-            findings=self._findings,
-            severity_summary=self._severity_summary(),
-        )
-
-    def _scan_prompt_injection(self, doc: Document, doc_id: str) -> None:
-        canonical = canonicalize(doc.text)
-        for rule in INJECTION_FAMILIES:
-            haystack = doc.text if rule.surface == "raw" else canonical
+    def _scan_rules(
+        self, text: str, rules: tuple[PatternFamily, ...], kind: FindingType,
+        doc_id: str, index: int, path: str | None = None, *, raw: bool = False,
+    ) -> list[Finding]:
+        findings: list[Finding] = []
+        canonical = canonicalize(text)
+        for rule in rules:
+            if rule.family not in self.enabled_families:
+                continue
+            haystack = text if raw or rule.surface == "raw" else canonical
             match = rule.pattern.search(haystack)
             if match:
-                self._findings.append(Finding(
-                    finding_type=FindingType.PROMPT_INJECTION_IN_DOCUMENT,
-                    severity=rule.severity,
-                    document_id=doc_id,
-                    description=f"Prompt injection detected in document body ({rule.family})",
-                    evidence=self._evidence(doc.text, match.group(0)),
-                    remediation=rule.remediation,
-                    owasp_mapping=rule.owasp,
-                    family=rule.family,
+                evidence = self._evidence(text, match.group(0))
+                if self.redact_evidence:
+                    evidence = _SECRET_RE.sub("[REDACTED]", evidence)
+                    if rule.family == "metadata_credential_leak":
+                        evidence = "[REDACTED credential]"
+                findings.append(Finding(
+                    kind, rule.severity, doc_id,
+                    f"Potential risk ({rule.family}); heuristic match requires context",
+                    evidence[:120], rule.remediation, rule.owasp, rule.family, index, path,
                 ))
-
-    def _scan_metadata(self, doc: Document, doc_id: str) -> None:
-        metadata_str = str(doc.metadata or {})
-        for rule in METADATA_FAMILIES:
-            match = rule.pattern.search(metadata_str)
-            if match:
-                self._findings.append(Finding(
-                    finding_type=FindingType.METADATA_INJECTION,
-                    severity=rule.severity,
-                    document_id=doc_id,
-                    description=f"Malicious payload in document metadata ({rule.family})",
-                    evidence=match.group(0)[:100],
-                    remediation=rule.remediation,
-                    owasp_mapping=rule.owasp,
-                    family=rule.family,
-                ))
-
-    def _scan_chunk_splitting(self, doc: Document, doc_id: str) -> None:
-        for rule in SPLIT_FAMILIES:
-            match = rule.pattern.search(doc.text)
-            if match:
-                self._findings.append(Finding(
-                    finding_type=FindingType.CHUNK_SPLIT_ATTACK,
-                    severity=rule.severity,
-                    document_id=doc_id,
-                    description=f"Structural risk in document ({rule.family})",
-                    evidence=match.group(0)[:100],
-                    remediation=rule.remediation,
-                    owasp_mapping=rule.owasp,
-                    family=rule.family,
-                ))
-
-    def _scan_canonical_injection(self, doc: Document, doc_id: str) -> None:
-        """Detect payloads combining an instruction override with an enumerated action.
-
-        Runs on canonicalised text, so entity-encoded, zero-width-split and
-        whitespace-padded variants are caught (e.g. ``&#x49;gnore previous
-        instructions``).
-        """
-        canonical = canonicalize(doc.text)
-        has_override = INJECTION_FAMILIES[0].pattern.search(canonical) is not None
-        if has_override and _ACTION_ENUMERATION_RE.search(canonical):
-            self._findings.append(Finding(
-                finding_type=FindingType.CANONICAL_INJECTION,
-                severity=Severity.CRITICAL,
-                document_id=doc_id,
-                description=(
-                    "Canonical injection bypass: instruction override combined with an "
-                    "enumerated action in the same document"
-                ),
-                evidence=self._evidence(doc.text, "instruction:"),
-                remediation=(
-                    "Apply input canonicalisation (entity decode + NFKC + zero-width strip) and "
-                    "reject documents whose payload only surfaces after normalisation."
-                ),
-                owasp_mapping=LLM01_PROMPT_INJECTION,
-                family="canonical_override_plus_action",
-            ))
+        return findings
 
     @staticmethod
     def _evidence(raw: str, matched: str) -> str:
@@ -462,17 +540,8 @@ class RAGScanner:
         needle = matched.strip()
         if not needle:
             return ""
-        idx = raw.lower().find(needle)
-        if idx >= 0:
-            return raw[idx:idx + len(needle)][:120]
-        return needle[:120]
-
-    def _severity_summary(self) -> dict[str, int]:
-        summary: dict[str, int] = {}
-        for f in self._findings:
-            key = f.severity.value
-            summary[key] = summary.get(key, 0) + 1
-        return summary
+        idx = raw.lower().find(needle.lower())
+        return raw[idx:idx + len(needle)] if idx >= 0 else needle
 
     @staticmethod
     def _hash_content(content: str) -> str:

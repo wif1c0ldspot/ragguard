@@ -1,234 +1,109 @@
-# ragguard — Architecture
+# ragguard — architecture
 
-## Scope
+Start with the [one-pager](ARCHITECTURE_ONE_PAGER.md). The
+[harness guide](HARNESS_INTEGRATIONS.md) describes supported integration boundaries
+and distinguishes tested library behavior from proposed framework wiring.
 
-ragguard covers the parts of a RAG pipeline that generic LLM-security tooling misses: what enters
-the corpus, and how the vector store behaves once documents are in it. It is a **scanner**, not a
-firewall — it produces findings, severities, remediation text and a pass/review/reject decision for
-a caller to act on.
+## Responsibilities and data flow
 
-Three modules do the work:
+`scanner.py` owns `Document`, `Finding`, `ScanReport`, normalization and named rules.
+It holds no findings between calls. Body rules select raw or canonical text;
+metadata is traversed as JSON-like fields with JSON Pointer locations; structural
+rules inspect raw content. The composite override/action rule is gated by the
+prompt-injection switch and enabled-family selection. Legacy chunk and embedding
+settings are deprecated because this scanner does not chunk or embed documents.
 
-| Module | Class / API | Responsibility |
-|--------|-------------|----------------|
-| `ragguard/scanner.py` | `RAGScanner`, `canonicalize()`, `resolve_document_id()` | Document-body, metadata and structural scanning; finding model |
-| `ragguard/vector_check.py` | `VectorStoreIntegrityChecker` | Embedding-space attacks: poisoning, cross-user contamination |
-| `ragguard/pipeline.py` | `RAGPipelineGuard` | Ingestion-time middleware: accept / review / reject, batch decisions, JSON export |
+`pipeline.py` applies one immutable policy snapshot to both single and batch scans.
+Severity-based blocking can be overridden per family. Monitoring changes rejection
+into review. An accept override retains findings for audit. The caller decides
+whether a review flag should pause processing. JSON output includes schema/ruleset
+versions and structured finding evidence.
 
-## Pipeline position
+`boundary.py` makes that pause explicit for harnesses: `ContentBoundary` defaults
+to an enforcing guard and withholds both review and reject results. `require`
+returns permitted text or raises `ContentBlockedError`; `arequire` uses the same
+logic through a worker thread. Validation errors propagate. It never executes
+retrieval, tools, model calls or storage writes. The caller must authorize access,
+render content and enforce the result at every relevant path.
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │           RAG Pipeline (caller)             │
-                    │   Document Ingestion → Vector Store → Query │
-                    └──────┬──────────────┬──────────────┬────────┘
-                           │              │              │
-                    ┌──────▼──────┐ ┌─────▼─────┐ ┌─────▼─────┐
-                    │  Ingestion  │ │  Vector   │ │ Reporting │
-                    │   Scanner   │ │ Integrity │ │  / Gate   │
-                    └──────┬──────┘ └─────┬─────┘ └─────┬─────┘
-                           │              │              │
-                    ┌──────▼──────────────▼──────────────▼──────┐
-                    │            RAGPipelineGuard                │
-                    │  (ingestion middleware / CI gate)          │
-                    └──────┬──────────────┬──────────────┬──────┘
-                           │              │              │
-                    ┌──────▼──────┐ ┌─────▼─────┐ ┌─────▼─────┐
-                    │ Injection   │ │ Metadata  │ │Structural │
-                    │   (7)       │ │   (5)     │ │   (4)     │
-                    └──────┬──────┘ └─────┬─────┘ └─────┬──────┘
-                           │              │              │
-                    ┌──────▼──────────────▼──────────────▼──────┐
-                    │  ScanReport — findings, severity summary   │
-                    │  OWASP LLM Top 10 mapping, remediation      │
-                    └───────────────────────────────────────────┘
-```
+`vector_check.py` is a separate assessment API, never implicitly invoked by
+`RAGPipelineGuard`. It validates a common finite numeric vector space, normalizes
+vectors once, compares bounded pairs and returns heuristic anomalies. It neither
+connects to a vector store nor verifies entitlements or embedding provenance.
 
-`VectorStoreIntegrityChecker` runs *after* ingestion, against documents that carry embeddings.
+## Identity and findings
 
-## Detection model
+An explicit source ID is preferred. The fallback fingerprint is the first 12 hex
+characters of SHA-256 of the complete text. This is a compact content label, not
+an authorization identifier or a guaranteed unique key. Metadata is intentionally
+not part of the text fingerprint. `document_index` disambiguates occurrences in
+one scan, so equal content with different metadata cannot mix batch decisions.
+Duplicate explicit IDs in one pipeline batch raise an error.
 
-### 1. Canonicalisation
+Findings carry a family, potential-impact severity, heuristic confidence, OWASP
+category, remediation, evidence, document ID and occurrence index. Metadata
+findings include a field path. Pair assessments retain related document IDs.
+Evidence redacts recognized credential patterns by default; this is not a universal
+secret detector. Explicit raw-evidence mode requires protected handling by callers.
 
-Every text-based rule matches against `canonicalize(text)`:
+## Normalization and rule policy
 
-```
-raw text
-  → html.unescape()                 &#x49;gnore      ⇒ "Ignore"
-  → unicodedata.normalize("NFKC")   full-width/ligatures ⇒ ASCII equivalents
-  → strip zero-width + bidi         "ig\u200bnore"   ⇒ "ignore"
-  → collapse whitespace             "IGNORE   PREV"  ⇒ "ignore prev"
-  → lowercase
-```
+Canonicalization decodes HTML entities, applies NFKC, strips selected invisible
+formatting controls, preserves real whitespace boundaries, collapses whitespace
+and lowercases. It is not a general decoder or semantic analysis engine. Rules
+whose signal is raw encoding or markup inspect raw text. Matching HTML ignores
+case. Metadata keys/values are inspected without invoking arbitrary object reprs;
+unsupported values, cycles and excessive nesting are rejected.
 
-This is why an entity-encoded or zero-width-split payload is caught by the same family that catches
-its plain-text form. Rules whose *signal is the obfuscation itself* (encoded payload runs, dangerous
-markup) opt out with `surface="raw"` and match the original text.
+`RAGScanner(enabled_families=...)` selects an explicit set; unknown names fail.
+Check switches control body, metadata and structural surfaces independently.
+Disabling body injection does not disable injection checks in enabled metadata.
+All switches off disables the composite rule too. Each matched rule has its own
+finding; counts describe rule hits, not unique successful attacks.
 
-### 2. Pattern families
+`IngestionPolicy` separates detection from action. Default enforcing policy rejects
+critical/high findings and marks other findings for review. Default monitoring
+policy reports review without rejection. `family_actions` provides narrow
+accept/review/reject overrides while preserving evidence. Assess false positives
+on the intended corpus before enabling rejection or adding exceptions.
 
-A rule is a `PatternFamily` dataclass — name, compiled pattern, severity, OWASP category,
-remediation text, surface. Detection is a linear scan over the families; **one finding per family
-that fires**, each carrying its own severity and mapping rather than a fixed one per finding type.
+## Vector integrity tradeoffs
 
-| Surface | Group | Families | Severities |
-|---------|-------|----------|-----------|
-| canonical | `INJECTION_FAMILIES` | `instruction_override`, `persona_override`, `system_prompt_extraction`, `jailbreak_mode`, `data_exfiltration` | critical / high |
-| raw | `INJECTION_FAMILIES` | `delimiter_injection`, `encoding_obfuscation` | high / medium |
-| raw | `METADATA_FAMILIES` | `metadata_key_value_payload`, `metadata_tool_call`, `metadata_code_execution`, `metadata_exfiltration_command`, `metadata_credential_leak` | critical / high |
-| raw | `SPLIT_FAMILIES` | `split_marker_open`, `split_marker_close`, `structural_dangerous_tag`, `structural_sql_keyword` | medium / low |
+`assess_embedding_consistency` reports high cosine similarity with low word-set
+Jaccard similarity. This can occur for legitimate paraphrases. It suggests review,
+not tampering attribution. `assess_cross_user_proximity` compares different users,
+skips near-identical text, and emits medium proximity findings; neither a finding
+nor a clean result establishes isolation. The legacy
+`check_cross_user_contamination` name remains for compatibility.
 
-`instruction_override` is deliberately qualifier-optional and allows up to six intervening
-qualifiers, so it matches `Ignore instructions…`, `Ignore all previous instructions…`,
-`Disregard the above rules…` and `Skip any earlier guidance…` alike. Requiring a qualifier was the
-cause of a real detection gap (see CHANGELOG 0.1.1).
+Assessment results include total/assessed document counts, missing-embedding
+indices and compared-pair counts. Malformed, nonfinite, zero-length/zero-norm or
+inconsistent-dimensional embeddings raise `ValueError`, including singleton inputs.
+Defaults bound documents (2,000), comparisons (2,000,000), dimensions (16,384) and
+findings (10,000). Exceeding a budget raises; results are never silently truncated.
+Normalized storage is O(nd), pair compute is O(n²d), and no n×n similarity matrix
+is allocated. These budgets are safeguards, not a production performance SLA.
 
-### 3. Composite canonical check
+## Harness contract and limits
 
-`_scan_canonical_injection` fires `canonical_injection` (critical) when an instruction override and
-an enumerated action (`instruction:`) appear in the same canonicalised document — the shape of a
-payload that only assembles after normalisation. It is layered on top of the per-family findings
-rather than replacing them.
+Scan the exact text being released, including any rendered metadata. Scan parents
+before chunking and final retrieved assemblies when concatenation could construct
+new instructions. Buffer streamed results until checked. Do not put held text in
+model-visible errors, history, memory or retry paths. Tool-output checks cannot
+undo actions: authorization, approvals and argument validation precede execution.
 
-### 4. Finding contract
+The project remains an English-centric heuristic library. It does not establish
+semantic intent, sandbox execution, control network egress, inspect images, enforce
+ACLs or guarantee absence of injection. Broad rules can still flag benign material.
+Real benchmark calibration and store-specific entitlement tests are follow-on work.
 
-```python
-Finding(
-    finding_type,      # FindingType enum
-    severity,          # Severity enum: critical | high | medium | low | info
-    document_id,       # explicit id, else sha256(text[:100])[:12]
-    description,
-    evidence,          # matched phrase, restored to original casing where locatable
-    remediation,
-    owasp_mapping,     # e.g. "LLM01: Prompt Injection"
-    family,            # which rule fired — the audit handle
-)
-```
+## Verification
 
-`ScanReport` exposes `is_clean`, `has_blocking_findings` (any critical/high) and `summary()`.
-
-`resolve_document_id(doc)` is the single source of truth for document identity. Re-deriving ids by
-hand (e.g. `doc.text[:50]`) silently fails to match findings — that bug made `batch_ingest` report
-every document as clean in 0.1.0.
-
-## Vector-store checker
-
-`VectorStoreIntegrityChecker(similarity_threshold=0.95)`:
-
-- **`check_embedding_consistency(documents)`** — normalises stored embeddings, computes the cosine
-  matrix, and flags pairs above `similarity_threshold` whose *text* similarity (Jaccard over word
-  sets) falls below `TEXT_SIMILARITY_CEILING` (0.8). High cosine + low text similarity is the cheap
-  signature of an adversarially injected embedding sitting next to legitimate content; legitimate
-  duplicates have near-identical text and are not flagged.
-- **`check_cross_user_contamination(user_documents)`** — compares embeddings across per-user
-  clusters; proximity above the threshold produces a critical `cross_user_contamination` finding
-  naming both users. The real fix is partitioning the index per tenant, which is what the
-  remediation text says.
-
-Both are O(n²) over the supplied set by design: they run on a sampled or per-tenant slice, not over
-a whole production index.
-
-## OWASP mapping (LLM Top 10, 2025)
-
-| Finding | Primary | Secondary |
-|---------|---------|-----------|
-| Prompt injection in body (`instruction_override`, `persona_override`, `jailbreak_mode`, `delimiter_injection`, `encoding_obfuscation`) | LLM01 Prompt Injection | LLM07 System Prompt Leakage where extraction is attempted |
-| `system_prompt_extraction` | LLM07 System Prompt Leakage | LLM01 |
-| `data_exfiltration`, `metadata_credential_leak`, `metadata_exfiltration_command` | LLM02 Sensitive Information Disclosure | LLM01 |
-| Metadata injection (`metadata_tool_call`, `metadata_code_execution`, `metadata_key_value_payload`) | LLM01 Prompt Injection | LLM06 Excessive Agency (tool-call hijack) |
-| Chunk-splitting markers | LLM01 Prompt Injection | LLM05 Improper Output Handling |
-| Structural risks (`structural_dangerous_tag`, `structural_sql_keyword`) | LLM05 Improper Output Handling | — |
-| Embedding poisoning | LLM08 Vector and Embedding Weaknesses | LLM04 Data and Model Poisoning |
-| Cross-user contamination | LLM08 Vector and Embedding Weaknesses | LLM02 Sensitive Information Disclosure |
-
-The `owasp_mapping` field on a finding carries the **primary** category; this table is the reference
-for the secondary ones.
-
-## Pipeline guard contract
-
-```python
-guard.ingest(text, metadata) -> {
-    "accepted":        bool,     # False when auto_reject and a critical/high finding fired
-    "document_id":     str,      # resolve_document_id()
-    "review_required": bool,     # findings present but not blocking
-    "findings":        [ {type, severity, family, description, evidence, remediation, owasp_mapping} ],
-    "report":          str,      # human-readable summary
-}
-
-guard.batch_ingest([{id, text, metadata}]) -> {
-    "total", "clean", "summary", "severity_summary",
-    "documents": [ {id, accepted, findings_count, families} ],
-}
-
-guard.export_report(report, path)   # JSON: findings + severity summary + OWASP mappings
-```
-
-`auto_reject=False` (the default) reports without blocking — useful in CI and dry-run rollouts.
-
-## Testing methodology
-
-Each family is covered by a positive test, and the risky ones by a false-positive guard:
-
-| Test group | What it locks down |
-|-----------|--------------------|
-| `test_scanner.py` — baseline | clean document stays clean; each finding type fires; severity summary |
-| `test_scanner.py` — override variants | 5 instruction-override phrasings (no qualifier, intervening word, alternate verb/noun, whitespace padding) |
-| `test_scanner.py` — obfuscation | entity-encoded payload still detected; `canonicalize()` output asserted |
-| `test_scanner.py` — false-positive guards | benign HTML is not a chunk-split attack; a plain SQL mention is not critical; ordinary how-to language stays clean |
-| `test_scanner.py` — contract | every finding carries family, OWASP mapping and evidence; family names unique |
-| `test_pipeline.py` | reject/accept/review decisions; batch correlation **with and without explicit ids** (regression for the 0.1.0 bug); JSON export |
-| `test_vector_check.py` | poisoning detected; legitimate duplicates and distinct embeddings not flagged; missing embeddings skipped |
-
-Current status: **33 tests passing**, ruff clean, mypy clean.
-
-```bash
-uv run pytest
-# .................................                                        [100%]
-# 33 passed in 0.05s
-uv run ruff check .
-uv run mypy ragguard
-uv run python examples/document_poisoning_demos.py
-```
-
-CI (`.github/workflows/test.yml`) runs lint, type check, tests and the demo smoke test on Python
-3.10 / 3.11 / 3.12.
-
-## Known limitations
-
-- Heuristic phrase detection, not a semantic classifier — novel payloads that avoid these word
-  shapes pass the scan.
-- English word shapes; NFKC canonicalisation covers Latin-script lookalikes, not cross-script
-  homoglyph attacks.
-- Evidence strings come from normalised text when the raw form cannot be located.
-- Chunk-splitting rules are markers; the correct fix is reassembling documents before scanning.
-- Vector checks flag proximity, not proven exfiltration, and require a supplied embedding space.
-- Some families are intentionally broad; tune by removing families rather than weakening regexes.
-
-## Verification / reproduction
-
-```bash
-git clone https://github.com/wif1c0ldspot/ragguard.git && cd ragguard
-uv sync
-uv run pytest -q                                       # 33 passed
-uv run ruff check .                                    # All checks passed
-uv run mypy ragguard                                   # Success: no issues found
-uv run python examples/document_poisoning_demos.py      # 7 sections, all complete
-```
-
-## Roadmap
-
-- [x] CI workflow: lint, type check, tests, demo smoke test
-- [ ] LangChain integration wrapper (optional extra)
-- [ ] LlamaIndex integration wrapper (optional extra)
-- [ ] Vector DB plugins (ChromaDB, pgvector) with tenant-partition checks
-- [ ] YAML rule engine for custom families
-- [ ] Benchmark suite against public attack datasets
-- [ ] Layered deployment alongside garak / promptfoo
-
-## Changelog
-
-See [CHANGELOG.md](../CHANGELOG.md).
-
-## License
-
-MIT — see [LICENSE](../LICENSE).
+Run `uv sync --frozen`, `uv run --frozen pytest --cov=ragguard`,
+`uv run --frozen ruff check .`, and `uv run --frozen mypy ragguard`.
+Run both examples, then `uv build` and smoke-test the installed wheel outside the
+source tree. CI binds the interpreter to its Python 3.10/3.11/3.12 matrix and checks
+the actual version before executing tests. Regression coverage includes concurrent
+scans, identity collisions, policy parity, redaction, metadata/Unicode variants,
+invalid vectors, budgets, and held content not reaching model input. These fixtures
+are not a representative held-out security benchmark.

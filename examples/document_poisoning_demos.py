@@ -55,6 +55,7 @@ def demo_indirect_prompt_injection():
 
     scanner = RAGScanner()
     report = scanner.scan_documents([poisoned_doc])
+    assert report.has_blocking_findings
 
     print("\nDocument: 'Weather Report (poisoned)'")
     print(f"Findings: {len(report.findings)}")
@@ -95,6 +96,7 @@ def demo_metadata_injection():
 
     scanner = RAGScanner()
     report = scanner.scan_documents([poisoned_doc])
+    assert report.has_blocking_findings
 
     print("\nDocument: 'Product Description (metadata poisoned)'")
     print(f"Findings: {len(report.findings)}")
@@ -147,6 +149,7 @@ def demo_chunk_splitting():
 
     scanner = RAGScanner()
     report = scanner.scan_documents([poisoned_doc])
+    assert report.has_blocking_findings
 
     print("\nDocument: 'API Manual (chunk-split injection)'")
     print(f"Findings: {len(report.findings)}")
@@ -190,11 +193,14 @@ def demo_canonical_bypass():
     scanner = RAGScanner()
     report = scanner.scan_documents(attacks)
 
+    assert any(f.document_id == "enc-001" and f.family == "instruction_override"
+               for f in report.findings)
     print("\nDocuments: 3 encoding-bypass attempts")
     print(f"Findings: {len(report.findings)}")
     for f in report.findings:
         print(f"  [{f.severity.value.upper()}] {f.finding_type.value}")
         print(f"    Doc: {f.document_id}")
+    print("The enc-003 template-shaped payload is a known heuristic miss.")
     return report
 
 
@@ -207,7 +213,7 @@ def demo_embedding_poisoning():
     malicious content during retrieval."""
 
     print("\n" + "=" * 60)
-    print("ATTACK 5: Embedding Poisoning & Cross-User Contamination")
+    print("ATTACK 5: Embedding Similarity Anomaly")
     print("=" * 60)
 
     # Simulate: attacker embeds a malicious doc that's semantically
@@ -237,10 +243,8 @@ def demo_embedding_poisoning():
     ]
 
     checker = VectorStoreIntegrityChecker(similarity_threshold=0.90)
-    findings = checker.check_embedding_consistency(
-        documents=docs,
-        query_embedding=legitimate.tolist(),
-    )
+    findings = checker.check_embedding_consistency(documents=docs)
+    assert findings and findings[0].related_document_ids == ("legit-001", "poison-001")
 
     print("\nVector Store: 3 documents, checking embedding consistency")
     print(f"Poisoning findings: {len(findings)}")
@@ -250,14 +254,13 @@ def demo_embedding_poisoning():
 
 
 # ============================================================
-# ATTACK 6: Cross-User Contamination in Shared Vector Store
+# ASSESSMENT 6: Cross-User Proximity in Shared Vector Store
 # ============================================================
 def demo_cross_user_contamination():
-    """In a multi-tenant RAG system, one user's documents leak
-    into another user's query results due to missing isolation."""
+    """Show cross-user proximity; this does not test retrieval authorization."""
 
     print("\n" + "=" * 60)
-    print("ATTACK 6: Cross-User Contamination")
+    print("ASSESSMENT 6: Cross-User Proximity")
     print("=" * 60)
 
 
@@ -278,8 +281,9 @@ def demo_cross_user_contamination():
         "external_user_b": user_b_docs,
     })
 
-    print("\nShared vector store: 2 users, checking isolation")
-    print(f"Cross-contamination findings: {len(findings)}")
+    assert findings and all(f.severity.value == "medium" for f in findings)
+    print("\nShared vector store: 2 users, checking proximity (not authorization)")
+    print(f"Proximity findings: {len(findings)}")
     for f in findings:
         print(f"  [{f.severity.value.upper()}] {f.description}")
         print(f"    Remediation: {f.remediation}")
@@ -322,6 +326,7 @@ def demo_pipeline_integration():
     ]
 
     result = guard.batch_ingest(batch)
+    assert [d["accepted"] for d in result["documents"]] == [True, False, True, False]
 
     print("\nBatch: 4 documents")
     print(f"Pipeline clean: {result['clean']}")
