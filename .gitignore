@@ -37,3 +37,6 @@ htmlcov/
 # DeepSeek plugin development
 node_modules/
 *.tgz
+
+# node_modules can also appear as a symlink; the trailing-slash rule only matches dirs
+node_modules
