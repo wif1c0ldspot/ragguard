@@ -2,10 +2,11 @@
 
 Ragguard's default remains the dependency-free heuristic scanner. Python callers
 can add a local or remote semantic detector to `RAGPipelineGuard`. No model weights,
-provider SDK, API key handling, or network client is bundled. An optional offline
-Prompt Guard 2 implementation is available; see below. The adapter is trusted
+provider SDK, API key handling, or network client is bundled. Optional offline
+Prompt Guard 2 and ProtectAI implementations are available; see below. The adapter is trusted
 application code; its model output is validated before it can produce findings.
-This interface adds integration capability, not measured semantic recall.
+The interface itself does not imply detection quality. Reproducible model
+measurements and their limits are documented in [model evaluation](MODEL_EVALUATION.md).
 
 ## Adapter contract
 
@@ -119,7 +120,9 @@ retrieval domain. Reassess these results after provider/model changes.
 
 `LocalPromptInjectionDetector` implements the official
 [Prompt Guard 2 22M classifier](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M).
-The publisher controls weight access and licensing. Provision a reviewed snapshot
+It also supports the ungated ProtectAI DeBERTa v2 identity described in
+[model evaluation](MODEL_EVALUATION.md). Set `model_id` on both the configuration
+and calibration helper for that model. Meta controls Prompt Guard weight access and licensing. Provision a reviewed snapshot
 in your Hugging Face cache, install compatible `torch`, `transformers` and
 `sentencepiece` in that model runtime, and record their exact versions. The
 adapter uses CPU inference, safetensors, `trust_remote_code=False` and

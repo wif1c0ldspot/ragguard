@@ -41,7 +41,7 @@ contexts through the host's native block contract.
 On startup the worker writes exactly one ready frame before any response:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.3.0"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3", "schema_version": "1.2", "package_version": "0.4.0a1"}
 ```
 
 The client accepts the handshake only if it has exactly these five keys, `protocol`

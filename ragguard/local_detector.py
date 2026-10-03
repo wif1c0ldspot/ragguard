@@ -1,8 +1,9 @@
-"""Optional offline Prompt Guard 2 adapter; importing this module needs no ML SDK.
+"""Optional offline classifiers; importing this module needs no ML SDK.
 
 Model card: https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M
-Weights are gated by the publisher. Provision a reviewed, pinned snapshot yourself;
-this adapter never downloads weights or accepts a model license on your behalf.
+Alternative: https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
+Provision a reviewed, pinned snapshot yourself; this adapter never downloads
+weights or accepts a model license on your behalf.
 """
 
 from __future__ import annotations
@@ -24,6 +25,15 @@ from ragguard.detectors import (
 )
 
 MODEL_ID = "meta-llama/Llama-Prompt-Guard-2-22M"
+PROTECTAI_MODEL_ID = "protectai/deberta-v3-base-prompt-injection-v2"
+_MODEL_LABELS = {
+    MODEL_ID: {0: "BENIGN", 1: "MALICIOUS"},
+    PROTECTAI_MODEL_ID: {0: "SAFE", 1: "INJECTION"},
+}
+_ADAPTER_NAMES = {
+    MODEL_ID: "transformers-prompt-guard-2-cpu",
+    PROTECTAI_MODEL_ID: "transformers-protectai-deberta-v2-cpu",
+}
 
 
 def _digest(value: object) -> str:
@@ -51,8 +61,11 @@ class ScoreCalibration:
     recall: float
     benign_samples: int
     attack_samples: int
+    model_id: str = MODEL_ID
 
     def __post_init__(self) -> None:
+        if self.model_id not in _MODEL_LABELS:
+            raise ValueError("unsupported local classifier model_id")
         if not re.fullmatch(r"[0-9a-f]{40}", self.model_revision):
             raise ValueError("model_revision must be an immutable 40-character commit SHA")
         if not re.fullmatch(r"[0-9a-f]{64}", self.dataset_sha256):
@@ -69,6 +82,7 @@ class ScoreCalibration:
 def calibrate_threshold(
     samples: list[tuple[float, bool]], *, model_revision: str, dataset_sha256: str,
     max_false_positive_rate: float = 0.01,
+    model_id: str = MODEL_ID,
 ) -> ScoreCalibration:
     """Choose maximum empirical recall under the specified observed FPR ceiling.
 
@@ -97,7 +111,8 @@ def calibrate_threshold(
     if not feasible:
         raise ValueError("no threshold satisfies the false-positive ceiling")
     recall, threshold, fpr = max(feasible)
-    return ScoreCalibration(model_revision, dataset_sha256, threshold, fpr, recall, benign, attacks)
+    return ScoreCalibration(model_revision, dataset_sha256, threshold, fpr, recall,
+                            benign, attacks, model_id)
 
 
 @dataclass(frozen=True)
@@ -106,19 +121,23 @@ class LocalDetectorConfig:
     calibration: ScoreCalibration | None = None
     max_input_chars: int = 20_000
     max_tokens: int = 512
+    model_id: str = MODEL_ID
 
     def __post_init__(self) -> None:
+        if self.model_id not in _MODEL_LABELS:
+            raise ValueError("unsupported local classifier model_id")
         if not re.fullmatch(r"[0-9a-f]{40}", self.model_revision):
             raise ValueError("model_revision must be an immutable 40-character commit SHA")
         if self.calibration is not None and (
             not isinstance(self.calibration, ScoreCalibration)
             or self.calibration.model_revision != self.model_revision
+            or self.calibration.model_id != self.model_id
         ):
-            raise ValueError("calibration must match the pinned model revision")
+            raise ValueError("calibration must match the pinned model identity and revision")
         if type(self.max_input_chars) is not int or self.max_input_chars < 1:
             raise ValueError("max_input_chars must be positive")
         if type(self.max_tokens) is not int or not 1 <= self.max_tokens <= 512:
-            raise ValueError("Prompt Guard 2 supports at most 512 tokens")
+            raise ValueError("supported local classifiers accept at most 512 tokens")
 
 
 class LocalPromptInjectionDetector:
@@ -144,7 +163,7 @@ class LocalPromptInjectionDetector:
         if calibration is None:
             raise ValueError("detection requires an explicit measured calibration record")
         return DetectorProvenance(
-            adapter="transformers-prompt-guard-2-cpu", model_id=MODEL_ID,
+            adapter=_ADAPTER_NAMES[self.config.model_id], model_id=self.config.model_id,
             model_revision=calibration.model_revision,
             config_sha256=_digest(asdict(self.config)),
             calibration_sha256=_digest(asdict(calibration)),
@@ -161,12 +180,12 @@ class LocalPromptInjectionDetector:
                 ) from exc
             options = dict(revision=self.config.model_revision,
                            local_files_only=True, trust_remote_code=False)
-            tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_ID, **options)
+            tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_id, **options)
             model = transformers.AutoModelForSequenceClassification.from_pretrained(
-                MODEL_ID, use_safetensors=True, **options,
+                self.config.model_id, use_safetensors=True, **options,
             ).to("cpu").eval()
             labels = {int(key): label for key, label in model.config.id2label.items()}
-            if labels != {0: "BENIGN", 1: "MALICIOUS"}:
+            if labels != _MODEL_LABELS[self.config.model_id]:
                 raise ValueError("unexpected classifier label mapping")
             self._runtime = torch, tokenizer, model
         return self._runtime

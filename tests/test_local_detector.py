@@ -162,3 +162,64 @@ def test_character_budget_is_checked_before_loading_optional_dependencies(monkey
     monkeypatch.setattr(adapter, "_load", never_load)
     with pytest.raises(ValueError, match="input budget"):
         adapter.detect(DetectorInput("too long", 0, "id"))
+
+
+def test_calibration_is_bound_to_model_identity_as_well_as_revision():
+    from ragguard.local_detector import PROTECTAI_MODEL_ID
+
+    with pytest.raises(ValueError, match="model identity"):
+        LocalDetectorConfig(REVISION, calibration(), model_id=PROTECTAI_MODEL_ID)
+    record = calibrate_threshold(
+        [(0.1, False), (0.8, True)], model_revision=REVISION, dataset_sha256=DATASET,
+        model_id=PROTECTAI_MODEL_ID,
+    )
+    adapter = LocalPromptInjectionDetector(LocalDetectorConfig(
+        REVISION, record, model_id=PROTECTAI_MODEL_ID,
+    ))
+    assert adapter.provenance.model_id == PROTECTAI_MODEL_ID
+    assert adapter.provenance.adapter == "transformers-protectai-deberta-v2-cpu"
+    assert record.model_id == PROTECTAI_MODEL_ID
+
+
+def test_only_reviewed_models_are_supported():
+    with pytest.raises(ValueError, match="unsupported"):
+        LocalDetectorConfig(REVISION, model_id="unreviewed/model")
+
+
+def test_protectai_load_checks_its_exact_label_mapping(monkeypatch):
+    from ragguard.local_detector import PROTECTAI_MODEL_ID
+
+    loads = []
+
+    class Model:
+        config = SimpleNamespace(id2label={0: "SAFE", 1: "INJECTION"})
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    def load(model_id, **kwargs):
+        loads.append(model_id)
+        return Model()
+
+    modules = {
+        "torch": object(),
+        "transformers": SimpleNamespace(
+            AutoTokenizer=SimpleNamespace(from_pretrained=load),
+            AutoModelForSequenceClassification=SimpleNamespace(from_pretrained=load),
+        ),
+    }
+    monkeypatch.setattr("ragguard.local_detector.importlib.import_module", modules.__getitem__)
+    adapter = LocalPromptInjectionDetector(LocalDetectorConfig(
+        REVISION, model_id=PROTECTAI_MODEL_ID,
+    ))
+    adapter._load()
+    assert loads == [PROTECTAI_MODEL_ID, PROTECTAI_MODEL_ID]
+    Model.config.id2label = {0: "INJECTION", 1: "SAFE"}
+    other = LocalPromptInjectionDetector(LocalDetectorConfig(
+        REVISION, model_id=PROTECTAI_MODEL_ID,
+    ))
+    with pytest.raises(ValueError, match="label mapping"):
+        other._load()

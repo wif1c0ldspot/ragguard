@@ -69,7 +69,8 @@ storage, tool execution isolation, network controls, retries and logging.
 ## Remaining experiments
 
 No production false-positive rate, multilingual robustness, adaptive attack
-success rate, or end-to-end LLM utility result is claimed. Run licensed pinned
+success rate, or general agent-utility guarantee is claimed. The follow-up
+measurements below are bounded research results. Run licensed pinned
 model inference, calibrate on domain-matched examples, and then measure an
 independent evaluation split. Evaluate actual attacker-goal success and normal
 task completion together in a model-backed harness before enabling new semantic
@@ -126,4 +127,55 @@ risks, not a certification or a claim that ragguard covers an entire category.
   and drawn from one trigger group, not a production false-positive estimate.
 - The exposed transformation corpus detects 9/24 attack cases and flags 4/24
   benign cases. It is a gap-finding regression exercise, not an adaptive attack
-  success claim. Model-backed protection and task utility remain unmeasured.
+  success claim. At this initial stage, model-backed protection and task utility
+  were unmeasured; the follow-up experiments below record the subsequent runs.
+
+
+## Follow-up: actual local classifier measurements
+
+The full external corpus was scored offline with the pinned Apache-2.0 ProtectAI
+DeBERTa v2 checkpoint: 2,447 inputs, zero model errors, zero incomplete rule scans.
+Development thresholds were fixed before holdout inference at a 5% empirical
+false-positive ceiling. On the base holdout, the model detected 0/357 and rules
+or combined policy detected 34/357. On enhanced holdout, the model detected
+88/357 and rules or combined policy detected 357/357. All policies flagged 0/93
+benign holdout examples. This checkpoint added no measured recall at that ceiling;
+semantic detection remains disabled by default.
+
+These are source-confounded public datasets with unknown model-training overlap,
+not deployment performance. The earlier verification record describes the state
+before this actual-model follow-up. See [model reproduction](MODEL_EVALUATION.md)
+and [full raw score report](../evals/reports/semantic-protectai.json) for exact
+weights, calibration, runtime versions, token counts, latencies and denominators.
+
+
+## Follow-up: paired local generation probe
+
+Six predetermined synthetic development scenarios were run with a pinned
+Qwen2.5-0.5B-Instruct generator, once with clean and attacked references under
+baseline and protected conditions. There were 22 actual generated responses, two
+protected-context blocks and zero execution errors. No tools, retrieval ranking
+or external side effects were involved.
+
+Under the frozen whole-answer judge, exact attacker-target matches were 1/6 in
+both arms; clean answer matches were 5/6 in both. Attacked legitimate-answer
+matches fell from 4/6 to 2/6 because the boundary blocked two direct attacks that
+the baseline model had already resisted. Both factual-poisoning cases were
+accepted and conveyed in both arms. The exact judge counts only one as a target
+match because the other output includes units; target-match rate is not a harmful
+answer rate. No prevention or generalization gain is claimed.
+
+See [the design, raw outputs and reproduction](RAG_GENERATION_PROBE.md). The
+judge and cases were not changed after seeing results. Further evaluation needs
+representative tasks, validated outcome judgments and adaptive attacks before
+any deployment-security claim.
+
+
+## Release verification
+
+The follow-up tree passed 715 tests on each of Python 3.10, 3.11 and 3.12,
+60 TypeScript tests, TypeScript checking, Ruff, mypy and both frozen synthetic
+regression gates. The final isolated Python 3.12 coverage run passed at 94%.
+An earlier concurrent coverage run exhausted a test worker startup allowance;
+the isolated rerun passed without changing production deadlines or test assertions.
+Model binaries and download caches are ignored and excluded from release source.
