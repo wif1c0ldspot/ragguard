@@ -129,3 +129,50 @@ def test_boundary_uses_typed_evaluation():
     assert (seen[0].text, seen[0].metadata, seen[0].id, seen[0].source) == (
         "Useful facts.", {"title": "t"}, "doc", "web",
     )
+
+
+@pytest.mark.parametrize("boundary", [Boundary.MEMORY_READ, Boundary.MEMORY_WRITE,
+                                      Boundary.TOOL_DESCRIPTION, Boundary.FINAL_CONTEXT])
+def test_extended_boundaries_bind_exact_rendered_text(boundary):
+    import hashlib
+
+    text = "  Useful reference.\n"
+    result = ContentBoundary().check(Document(text), boundary=boundary)
+    assert result.boundary is boundary
+    assert result.scan_complete
+    assert result.content_sha256 == hashlib.sha256(text.encode()).hexdigest()
+    assert result.matches_text(text)
+    assert not result.matches_text(text.strip())
+    assert len(result.policy_sha256) == 64
+
+
+def test_incomplete_metadata_scan_is_never_released_even_with_review_enabled():
+    from ragguard import RAGScanner
+
+    guard = RAGPipelineGuard(scanner=RAGScanner(max_metadata_nodes=1), auto_reject=False)
+    result = ContentBoundary(guard, allow_review=True).check(
+        Document("Reference", metadata={"nested": {"text": "value"}}),
+    )
+    assert not result.scan_complete
+    assert result.released_text is None
+    assert result.matches_text("Reference")
+
+
+def test_boundary_policy_fingerprint_changes_with_enforcement_settings():
+    document = Document("Reference")
+    enforce = ContentBoundary().check(document)
+    monitored = ContentBoundary(allow_review=True).check(document)
+    assert enforce.policy_sha256 != monitored.policy_sha256
+
+
+def test_boundary_fingerprint_binds_scanner_and_detector_budgets():
+    from ragguard import DetectorConfig, RAGScanner
+
+    document = Document("Reference")
+    base = ContentBoundary().check(document).policy_sha256
+    variants = [
+        RAGPipelineGuard(scanner=RAGScanner(enabled_families=[]), auto_reject=True),
+        RAGPipelineGuard(scanner=RAGScanner(max_metadata_nodes=20), auto_reject=True),
+        RAGPipelineGuard(detector_config=DetectorConfig(max_documents=2), auto_reject=True),
+    ]
+    assert all(ContentBoundary(guard).check(document).policy_sha256 != base for guard in variants)

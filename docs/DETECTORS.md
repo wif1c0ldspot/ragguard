@@ -1,8 +1,9 @@
 # Optional semantic detector adapters
 
 Ragguard's default remains the dependency-free heuristic scanner. Python callers
-can add a local or remote semantic detector to `RAGPipelineGuard`. No model,
-provider SDK, API key handling, or network client is bundled. The adapter is trusted
+can add a local or remote semantic detector to `RAGPipelineGuard`. No model weights,
+provider SDK, API key handling, or network client is bundled. An optional offline
+Prompt Guard 2 implementation is available; see below. The adapter is trusted
 application code; its model output is validated before it can produce findings.
 This interface adds integration capability, not measured semantic recall.
 
@@ -96,11 +97,11 @@ Character budgets bound the text supplied; they are not token or monetary caps.
 `BatchDecision.detector_runs` contains per-occurrence elapsed seconds, status,
 detection count, and optional adapter-reported tokens and USD cost. These usage
 values are not independently verified. Unknown usage is `None`, never inferred
-as zero. Failed calls may incur costs that the adapter cannot report. The existing
-JSON report schema deliberately stays unchanged; use the typed batch API to
-collect telemetry, e.g. `dataclasses.asdict(run)`. `evaluate` and dictionary
-convenience methods return existing shapes and do not expose successful call
-telemetry. The worker protocol does not configure adapters; use the Python API.
+as zero. Failed calls may incur costs that the adapter cannot report. Report schema 1.2 serializes this telemetry in batch `detector_runs`,
+including optional `DetectorProvenance` (adapter, model ID/revision, configuration
+and calibration SHA-256). Unknown provenance remains null. Single-document
+`evaluate` and `ingest` do not retain run telemetry; use `evaluate_batch` when
+you need it. The worker protocol does not configure adapters; use the Python API.
 
 ## Measure a real adapter before enforcement
 
@@ -112,3 +113,75 @@ and report false positives and false negatives alongside p50/p95 latency,
 provider errors, retries, tokens and billed cost. Include multilingual and
 paraphrased attacks, benign quoted instructions, and material from the intended
 retrieval domain. Reassess these results after provider/model changes.
+
+
+## Offline model inference and empirical calibration
+
+`LocalPromptInjectionDetector` implements the official
+[Prompt Guard 2 22M classifier](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M).
+The publisher controls weight access and licensing. Provision a reviewed snapshot
+in your Hugging Face cache, install compatible `torch`, `transformers` and
+`sentencepiece` in that model runtime, and record their exact versions. The
+adapter uses CPU inference, safetensors, `trust_remote_code=False` and
+`local_files_only=True`; it never downloads code or weights or accepts terms.
+The default ragguard installation still needs only the standard library.
+
+```python
+from ragguard import (
+    LocalDetectorConfig, LocalPromptInjectionDetector, calibrate_threshold,
+)
+
+# Use actual immutable revision and dataset digest values from your records.
+scorer = LocalPromptInjectionDetector(LocalDetectorConfig(model_revision=revision))
+scores = [(scorer.score(text)[0], is_attack) for text, is_attack in calibration_examples]
+calibration = calibrate_threshold(
+    scores, model_revision=revision, dataset_sha256=calibration_dataset_sha256,
+    max_false_positive_rate=0.01,
+)
+adapter = LocalPromptInjectionDetector(LocalDetectorConfig(
+    model_revision=revision, calibration=calibration,
+))
+```
+
+The example variables are application-supplied, not a bundled dataset or a
+pre-calibrated threshold. `score` allows data collection without a threshold;
+`detect` refuses to run without a calibration record for the same revision.
+Both benign and attack examples are required. Selection maximizes empirical
+recall under the observed false-positive ceiling; ties prefer the higher
+threshold. A 1% observed ceiling is not a guarantee of 1% production FPR. Evaluate
+an independent set, confidence intervals and domain/language shifts afterwards.
+
+Inputs exceeding character or 512-token budgets are refused, never truncated.
+Long documents need explicitly designed windowing or another detector; a
+prefix-only score must not be represented as full-document coverage. Missing
+weights/dependencies, unexpected label mappings, invalid outputs and budget
+failures propagate through the fail-closed detector contract.
+
+Contract tests emulate the runtime to check token limits, label validation,
+calibration and provenance. They do not measure this model's detection quality.
+
+## Killable deadlines
+
+`ProcessDetector` wraps a trusted top-level factory in a fresh spawned process.
+Use a normal main guard so importing the application does not start new workers:
+
+```python
+from functools import partial
+from ragguard import ProcessDetector, RAGPipelineGuard, LocalPromptInjectionDetector
+
+if __name__ == "__main__":
+    detector = ProcessDetector(
+        partial(LocalPromptInjectionDetector, config), timeout_seconds=30,
+        provenance=LocalPromptInjectionDetector(config).provenance,
+    )
+    guard = RAGPipelineGuard(auto_reject=True, detector=detector)
+```
+
+The deadline includes process startup and model loading. Cleanup terminates,
+then kills if necessary, and may add two bounded cleanup grace periods. A fresh
+process for each occurrence is deliberately simple but has cold-start overhead.
+It is not an OS sandbox and does not contain arbitrary subprocess descendants;
+only use trusted factories. Bound concurrent calls in the application. A timeout
+withholds the result; it cannot reverse remote requests already sent or charges
+already incurred. The original `max_elapsed_seconds` setting remains a post-call
+budget check, not an interrupt mechanism.

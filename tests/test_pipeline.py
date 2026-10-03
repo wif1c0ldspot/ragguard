@@ -427,12 +427,14 @@ def test_evaluate_matches_ingest_document_fields():
 def test_result_key_shapes_are_stable():
     batch = RAGPipelineGuard().batch_ingest([{"text": BENIGN}])
     assert list(batch) == [
-        "schema_version", "ruleset_version", "total", "clean", "summary",
+        "schema_version", "ruleset_version", "total", "clean", "scan_complete", "summary",
         "severity_summary", "accepted_count", "review_count", "rejected_count", "documents",
+        "detector_runs",
     ]
     assert list(batch["documents"][0]) == [
         "id", "document_id", "document_index", "source", "accepted", "review_required",
-        "decision", "findings_count", "families", "advisory_families", "findings",
+        "decision", "findings_count", "families", "advisory_families", "scan_complete",
+        "incomplete_reasons", "findings",
     ]
 
 

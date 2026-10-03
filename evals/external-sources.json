@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "notinject",
+      "repository": "https://github.com/InjecGuard/InjecGuard",
+      "revision": "cb1531f36bffb38b6493438217b36cda8875da8a",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "datasets/NotInject_one.json",
+          "url": "https://raw.githubusercontent.com/InjecGuard/InjecGuard/cb1531f36bffb38b6493438217b36cda8875da8a/datasets/NotInject_one.json",
+          "sha256": "69b535596d95102424e9c5946944feb4f2d596687eb8213f2ecad75478e5ffdd",
+          "bytes": 26117
+        },
+        {
+          "path": "datasets/NotInject_two.json",
+          "url": "https://raw.githubusercontent.com/InjecGuard/InjecGuard/cb1531f36bffb38b6493438217b36cda8875da8a/datasets/NotInject_two.json",
+          "sha256": "6043d94e75b48d8e7682d25dc79eaf45359e1e561ce520e3b8fd5625a91060c6",
+          "bytes": 29902
+        },
+        {
+          "path": "datasets/NotInject_three.json",
+          "url": "https://raw.githubusercontent.com/InjecGuard/InjecGuard/cb1531f36bffb38b6493438217b36cda8875da8a/datasets/NotInject_three.json",
+          "sha256": "ef01eff0d761d2e34571b3fdbcec08c30cd93efe8d0e1a2eb5c2baeb1873b070",
+          "bytes": 35765
+        },
+        {
+          "path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/InjecGuard/InjecGuard/cb1531f36bffb38b6493438217b36cda8875da8a/LICENSE",
+          "sha256": "fd8281430399b97e9fbefaa173b7aa1cb58cc8e4aaadcccd5e910937a195d119",
+          "bytes": 1062
+        },
+        {
+          "path": "README.md",
+          "url": "https://raw.githubusercontent.com/InjecGuard/InjecGuard/cb1531f36bffb38b6493438217b36cda8875da8a/README.md",
+          "sha256": "88fb5e65b0cae8e329b14d0cc86ee10e8a90e700384018a476c6aa5fe9892147",
+          "bytes": 7607
+        }
+      ]
+    },
+    {
+      "id": "injecagent",
+      "repository": "https://github.com/uiuc-kang-lab/InjecAgent",
+      "revision": "f19c9f2c79a41046eb13c03c51a24c567a8ffa07",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "data/test_cases_dh_base.json",
+          "url": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/f19c9f2c79a41046eb13c03c51a24c567a8ffa07/data/test_cases_dh_base.json",
+          "sha256": "0a8186468d21389af432e8c7b399ae42264d1b93a07b65c7a489468508604305",
+          "bytes": 672918
+        },
+        {
+          "path": "data/test_cases_ds_base.json",
+          "url": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/f19c9f2c79a41046eb13c03c51a24c567a8ffa07/data/test_cases_ds_base.json",
+          "sha256": "4daab35c62a3845e8b9400f4dca58b9c9f37e57cd33b2337552557fbb26282e9",
+          "bytes": 765370
+        },
+        {
+          "path": "data/test_cases_dh_enhanced.json",
+          "url": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/f19c9f2c79a41046eb13c03c51a24c567a8ffa07/data/test_cases_dh_enhanced.json",
+          "sha256": "885602716b72c18af80695ce6c2e1f242fa03163bc90b0788b0c5e4ab6216d50",
+          "bytes": 721878
+        },
+        {
+          "path": "data/test_cases_ds_enhanced.json",
+          "url": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/f19c9f2c79a41046eb13c03c51a24c567a8ffa07/data/test_cases_ds_enhanced.json",
+          "sha256": "7bc510868df032511053fc40e8470e68a041fb7148d055112093594bf73ab0ce",
+          "bytes": 817594
+        },
+        {
+          "path": "LICENCE",
+          "url": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/f19c9f2c79a41046eb13c03c51a24c567a8ffa07/LICENCE",
+          "sha256": "b48589499dbb84caa796b00b4ea652b0443e49660282c44d890fd473b8c0674e",
+          "bytes": 1066
+        },
+        {
+          "path": "README.md",
+          "url": "https://raw.githubusercontent.com/uiuc-kang-lab/InjecAgent/f19c9f2c79a41046eb13c03c51a24c567a8ffa07/README.md",
+          "sha256": "09e81a9e68d5c2a1b491456c83da4ef0126426deb7eafa8588349c2dcce278ea",
+          "bytes": 4586
+        }
+      ]
+    }
+  ],
+  "derived_corpora": {
+    "notinject": {
+      "count": 339,
+      "corpus_sha256": "be3d015666e40a9f94f963dd8dd35fb100f44a8077c0a9e70590698f9c6805e0",
+      "holdout_count": 93,
+      "holdout_sha256": "88565fc45eb4362cdc334abda978c6aa2e5c8711a08993e1ad51cbc5044f9d4d"
+    },
+    "injecagent-base": {
+      "count": 1054,
+      "corpus_sha256": "e0c945d959ebcf0009c315d2c9c4293aa32bf5d3c2193abe605f72e200013d83",
+      "holdout_count": 357,
+      "holdout_sha256": "1f8bb7c5d41ac2dfbd4bd994a6eebd18900c3fb08ad8a3cebe242fe47ee55c33"
+    },
+    "injecagent-enhanced": {
+      "count": 1054,
+      "corpus_sha256": "c009cbb27647cb0f3bba18bb20056d20af317d471f4081ce0269ba25108046e9",
+      "holdout_count": 357,
+      "holdout_sha256": "203a33b764cd753cc8cbfdb43ba6434da5b4463ec761649f3741eb2e1a328454"
+    }
+  }
+}

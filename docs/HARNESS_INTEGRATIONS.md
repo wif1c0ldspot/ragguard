@@ -153,3 +153,26 @@ then configure an absolute interpreter path. See the bundle README for exact
 build/install commands, scope/order requirements and tests. Tool finalizers and
 trusted middleware can execute outside this hook; it is not a full context
 firewall. No user profile is modified by building or testing the bundle.
+
+
+## Memory, tool descriptions and final context
+
+Use `Boundary.MEMORY_WRITE` before persistence and `Boundary.MEMORY_READ` before
+reintroducing stored text, with application-owned source authorization and expiry.
+Use `Boundary.TOOL_DESCRIPTION` at registration and when descriptions change;
+pinning a package version alone does not bind dynamic descriptions. Check
+`Boundary.FINAL_CONTEXT` after rendering all model-visible metadata and sources.
+These enum labels identify the boundary; the scanner does not implement storage,
+identity, authorization or tool execution for the application.
+
+`BoundaryResult.content_sha256` binds the exact checked UTF-8 text;
+`matches_text(text)` detects a different rendering. `policy_sha256` fingerprints
+known enforcement/scanner settings and declared detector identity; it is not a
+signature or a complete identity of arbitrary adapter code. A `scan_complete=False`
+result is always withheld, even in monitor mode with `allow_review=True`.
+
+See executable examples `examples/guarded_memory.py` and
+`examples/agent_controls.py` for expiry/re-scanning and deterministic action
+permissions. Both run locally without external side effects. The latter uses a
+fixed action and trusted destination identifiers; a caller-owned transport must
+resolve destinations and enforce its own network controls and deadlines.

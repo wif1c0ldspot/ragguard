@@ -55,7 +55,7 @@ a result cannot undo a tool's side effects. The host owns ACLs, credentials,
 approvals, sandboxing, egress and output validation.
 
 **Measured, not assumed:** `evals/` runs a synthetic corpus in CI. Ruleset
-2026.10.2 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
+2026.10.3 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
 multilingual and task-phrased exfiltration attacks are at 0%. Calibrate per-family
 policy on your own corpus before enabling automatic rejection.
 

@@ -4,14 +4,20 @@
   "title": "ragguard report",
   "description": "Outputs of RAGPipelineGuard.ingest, RAGPipelineGuard.batch_ingest and RAGPipelineGuard.export_report. Evidence is redacted scanner output but remains untrusted document content.",
   "oneOf": [
-    { "$ref": "#/$defs/ingestResult" },
-    { "$ref": "#/$defs/batchResult" },
-    { "$ref": "#/$defs/exportedReport" }
+    {
+      "$ref": "#/$defs/ingestResult"
+    },
+    {
+      "$ref": "#/$defs/batchResult"
+    },
+    {
+      "$ref": "#/$defs/exportedReport"
+    }
   ],
   "$defs": {
     "schemaVersion": {
       "description": "Version of this report format.",
-      "const": "1.1"
+      "const": "1.2"
     },
     "rulesetVersion": {
       "description": "Version of the detection ruleset that produced the findings.",
@@ -19,10 +25,20 @@
       "minLength": 1
     },
     "severity": {
-      "enum": ["critical", "high", "medium", "low", "info"]
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
     },
     "decision": {
-      "enum": ["accept", "review", "reject"]
+      "enum": [
+        "accept",
+        "review",
+        "reject"
+      ]
     },
     "findingType": {
       "enum": [
@@ -31,55 +47,158 @@
         "chunk_split_attack",
         "embedding_poisoning",
         "cross_user_contamination",
-        "canonical_injection"
+        "canonical_injection",
+        "scan_incomplete"
       ]
     },
     "familyList": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 },
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
       "uniqueItems": true
     },
     "severitySummary": {
       "description": "Finding count per severity; severities without findings are omitted.",
       "type": "object",
-      "propertyNames": { "$ref": "#/$defs/severity" },
-      "additionalProperties": { "type": "integer", "minimum": 1 }
+      "propertyNames": {
+        "$ref": "#/$defs/severity"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
     },
     "finding": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "type", "severity", "document_id", "description", "evidence", "remediation",
-        "owasp_mapping", "family", "document_index", "metadata_path",
-        "related_document_ids", "confidence", "related_document_indices"
+        "type",
+        "severity",
+        "document_id",
+        "description",
+        "evidence",
+        "remediation",
+        "owasp_mapping",
+        "family",
+        "document_index",
+        "metadata_path",
+        "related_document_ids",
+        "confidence",
+        "related_document_indices",
+        "owasp_mappings"
       ],
       "properties": {
-        "type": { "$ref": "#/$defs/findingType" },
-        "severity": { "$ref": "#/$defs/severity" },
-        "document_id": { "type": "string", "minLength": 1 },
-        "description": { "type": "string" },
-        "evidence": { "type": "string" },
-        "remediation": { "type": "string" },
-        "owasp_mapping": { "type": "string" },
-        "family": { "type": "string" },
-        "document_index": { "type": ["integer", "null"], "minimum": 0 },
+        "type": {
+          "$ref": "#/$defs/findingType"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "document_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "owasp_mapping": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "document_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
         "metadata_path": {
           "description": "JSON Pointer to the metadata field, with sensitive segments redacted.",
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        "related_document_ids": { "type": "array", "items": { "type": "string" } },
-        "confidence": { "type": "string", "minLength": 1 },
+        "related_document_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "minLength": 1
+        },
         "related_document_indices": {
           "type": "array",
-          "items": { "type": "integer", "minimum": 0 }
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "owasp_mappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "framework",
+              "edition",
+              "id",
+              "title",
+              "relationship"
+            ],
+            "properties": {
+              "framework": {
+                "const": "OWASP LLM Top 10"
+              },
+              "edition": {
+                "enum": [
+                  "2025",
+                  "2026"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^LLM[0-9]{2}$"
+              },
+              "title": {
+                "type": "string"
+              },
+              "relationship": {
+                "const": "related-risk"
+              }
+            }
+          }
         }
       }
     },
     "documentFields": {
       "type": "object",
       "required": [
-        "id", "document_id", "document_index", "source", "accepted", "review_required",
-        "decision", "findings_count", "families", "advisory_families", "findings"
+        "id",
+        "document_id",
+        "document_index",
+        "source",
+        "accepted",
+        "review_required",
+        "decision",
+        "findings_count",
+        "families",
+        "advisory_families",
+        "findings",
+        "scan_complete",
+        "incomplete_reasons"
       ],
       "properties": {
         "id": {
@@ -87,9 +206,20 @@
           "type": "string",
           "minLength": 1
         },
-        "document_id": { "type": "string", "minLength": 1 },
-        "document_index": { "type": "integer", "minimum": 0 },
-        "source": { "type": ["string", "null"] },
+        "document_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "document_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "accepted": {
           "description": "False only when decision is reject.",
           "type": "boolean"
@@ -98,8 +228,13 @@
           "description": "True only when decision is review.",
           "type": "boolean"
         },
-        "decision": { "$ref": "#/$defs/decision" },
-        "findings_count": { "type": "integer", "minimum": 0 },
+        "decision": {
+          "$ref": "#/$defs/decision"
+        },
+        "findings_count": {
+          "type": "integer",
+          "minimum": 0
+        },
         "families": {
           "description": "Every rule family that fired, sorted.",
           "$ref": "#/$defs/familyList"
@@ -108,18 +243,69 @@
           "description": "Families that fired only below the review floor and did not affect the decision.",
           "$ref": "#/$defs/familyList"
         },
-        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "scan_complete": {
+          "type": "boolean",
+          "description": "Configured scanner work completed within resource budgets. Does not imply exhaustive threat coverage."
+        },
+        "incomplete_reasons": {
+          "$ref": "#/$defs/familyList"
+        }
       },
       "allOf": [
         {
-          "if": { "properties": { "decision": { "const": "reject" } } },
-          "then": { "properties": { "accepted": { "const": false }, "review_required": { "const": false } } },
-          "else": { "properties": { "accepted": { "const": true } } }
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "reject"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "accepted": {
+                "const": false
+              },
+              "review_required": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "accepted": {
+                "const": true
+              }
+            }
+          }
         },
         {
-          "if": { "properties": { "decision": { "const": "review" } } },
-          "then": { "properties": { "review_required": { "const": true } } },
-          "else": { "properties": { "review_required": { "const": false } } }
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "review"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "review_required": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "review_required": {
+                "const": false
+              }
+            }
+          }
         }
       ]
     },
@@ -131,14 +317,22 @@
     "ingestResult": {
       "description": "Return value of RAGPipelineGuard.ingest.",
       "$ref": "#/$defs/documentFields",
-      "required": ["report", "schema_version", "ruleset_version"],
+      "required": [
+        "report",
+        "schema_version",
+        "ruleset_version"
+      ],
       "properties": {
         "report": {
           "description": "Human-readable scan summary.",
           "type": "string"
         },
-        "schema_version": { "$ref": "#/$defs/schemaVersion" },
-        "ruleset_version": { "$ref": "#/$defs/rulesetVersion" }
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "ruleset_version": {
+          "$ref": "#/$defs/rulesetVersion"
+        }
       },
       "unevaluatedProperties": false
     },
@@ -147,20 +341,67 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema_version", "ruleset_version", "total", "clean", "summary",
-        "severity_summary", "accepted_count", "review_count", "rejected_count", "documents"
+        "schema_version",
+        "ruleset_version",
+        "total",
+        "clean",
+        "summary",
+        "severity_summary",
+        "accepted_count",
+        "review_count",
+        "rejected_count",
+        "documents",
+        "scan_complete",
+        "detector_runs"
       ],
       "properties": {
-        "schema_version": { "$ref": "#/$defs/schemaVersion" },
-        "ruleset_version": { "$ref": "#/$defs/rulesetVersion" },
-        "total": { "type": "integer", "minimum": 0 },
-        "clean": { "type": "boolean" },
-        "summary": { "type": "string" },
-        "severity_summary": { "$ref": "#/$defs/severitySummary" },
-        "accepted_count": { "type": "integer", "minimum": 0 },
-        "review_count": { "type": "integer", "minimum": 0 },
-        "rejected_count": { "type": "integer", "minimum": 0 },
-        "documents": { "type": "array", "items": { "$ref": "#/$defs/documentResult" } }
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "ruleset_version": {
+          "$ref": "#/$defs/rulesetVersion"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clean": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "severity_summary": {
+          "$ref": "#/$defs/severitySummary"
+        },
+        "accepted_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "review_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rejected_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/documentResult"
+          }
+        },
+        "scan_complete": {
+          "type": "boolean",
+          "description": "Configured scanner work completed within resource budgets. Does not imply exhaustive threat coverage."
+        },
+        "detector_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/detectorRun"
+          }
+        }
       }
     },
     "exportedReport": {
@@ -168,16 +409,141 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema_version", "ruleset_version", "total_documents", "summary",
-        "severity_summary", "findings"
+        "schema_version",
+        "ruleset_version",
+        "total_documents",
+        "summary",
+        "severity_summary",
+        "findings",
+        "scan_complete"
       ],
       "properties": {
-        "schema_version": { "$ref": "#/$defs/schemaVersion" },
-        "ruleset_version": { "$ref": "#/$defs/rulesetVersion" },
-        "total_documents": { "type": "integer", "minimum": 0 },
-        "summary": { "type": "string" },
-        "severity_summary": { "$ref": "#/$defs/severitySummary" },
-        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "ruleset_version": {
+          "$ref": "#/$defs/rulesetVersion"
+        },
+        "total_documents": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summary": {
+          "type": "string"
+        },
+        "severity_summary": {
+          "$ref": "#/$defs/severitySummary"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "scan_complete": {
+          "type": "boolean",
+          "description": "Configured scanner work completed within resource budgets. Does not imply exhaustive threat coverage."
+        }
+      }
+    },
+    "detectorProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "model_id",
+        "model_revision",
+        "config_sha256",
+        "calibration_sha256"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "calibration_sha256": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "detectorRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_index",
+        "elapsed_seconds",
+        "status",
+        "detections",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd",
+        "provenance"
+      ],
+      "properties": {
+        "document_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "elapsed_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "error"
+          ]
+        },
+        "detections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/detectorProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       }
     }
   }

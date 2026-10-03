@@ -86,8 +86,9 @@ bounded to 16× the cap so de-duplication work stays linear.
 `scan_documents` does, then builds a window from the last `window_chars` of chunk
 *i* and the first `window_chars` of chunk *i + 1*. It checks both newline-separated
 and directly concatenated windows, including bounded decoded surfaces, so splitting
-a word or encoded payload can be detected across the boundary. An injection family that matches
-the window but neither chunk on its own is reported as `split_payload` on chunk *i*
+a word or encoded payload can be detected across the boundary. An injection match crossing
+the normalized boundary is reported as `split_payload` on chunk *i*, even when
+an independent same-family match occurs in either chunk,
 with the matched family's severity and both chunks in `related_document_ids`.
 Payloads spread over non-adjacent chunks, or assembled from different sources at
 retrieval time, need a scan of the final assembled context.
@@ -101,6 +102,11 @@ All switches off disables the composite rule too. Each matched rule has its own
 finding; counts describe rule hits, not unique successful attacks.
 
 `IngestionPolicy` separates detection from action. For each finding:
+
+Operational `scan_incomplete` findings always reject (review in monitoring);
+family overrides and review floors cannot downgrade them. Content boundaries
+withhold incomplete scans even when configured to release normal reviews.
+For other findings:
 
 1. A `family_actions` entry for its family decides (accept/review/reject).
 2. Otherwise, a finding ranked below `review_floor` (default `medium`; order
@@ -119,9 +125,10 @@ adding exceptions.
 
 ### Reports and schemas
 
-Reports carry `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.1`) and
-`ruleset_version` (`RULESET_VERSION`, currently `2026.10.2`). Schema 1.1 adds
-`advisory_families` to every per-document result. Two Draft 2020-12 schemas ship
+Reports carry `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.2`) and
+`ruleset_version` (`RULESET_VERSION`, currently `2026.10.3`). Schema 1.2 adds
+explicit completeness, versioned OWASP risk mappings and batch detector-run
+provenance. The 1.1 advisory-family fields are retained. Two Draft 2020-12 schemas ship
 in `ragguard/schemas/`: `report` (ingest, batch and exported reports) and
 `worker-protocol` (worker frames). `tests/test_schemas.py` validates real outputs
 against both, so a shape change without a schema change fails CI.
@@ -167,7 +174,7 @@ per-pair loop. These budgets are safeguards, not a production performance SLA.
 one response per line on stdout. On startup it writes a single handshake:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.3.0"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3", "schema_version": "1.2", "package_version": "0.4.0a1"}
 ```
 
 `package_version` is the installed distribution version, or `0+unknown` when run
@@ -216,7 +223,8 @@ checked. Do not put held text in model-visible errors, history, memory or retry
 paths. Tool-output checks cannot undo actions: authorization, approvals and
 argument validation precede execution.
 
-The project remains an English-centric heuristic library. It does not establish
+The default scanner remains English-centric and heuristic; the optional offline
+model adapter requires independently evaluated weights and calibration. It does not establish
 semantic intent, sandbox execution, control network egress, inspect images, enforce
 ACLs or guarantee absence of injection. Broad rules can still flag benign material.
 Store-specific entitlement tests are deployment work.
