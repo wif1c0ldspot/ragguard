@@ -24,8 +24,8 @@ from ragguard.scanner import (
 )
 from ragguard.taxonomy import owasp_mappings
 
-# 1.2 adds completeness, versioned risk mappings, and detector-run provenance.
-REPORT_SCHEMA_VERSION = "1.2"
+# 1.3 retains detector-run usage and provenance on each document decision.
+REPORT_SCHEMA_VERSION = "1.3"
 
 SEVERITY_RANK: Mapping[Severity, int] = MappingProxyType({
     Severity.INFO: 0,
@@ -80,6 +80,8 @@ class DocumentDecision:
     ``families`` lists every family that fired. ``advisory_families`` is the
     subset whose findings all ranked below the review floor (and had no family
     action), so they did not affect ``decision``.
+    ``detector_runs`` retains this occurrence's semantic audit, including clean
+    model results, usage, and declared provenance; it is empty without a detector.
     """
 
     document_id: str
@@ -89,6 +91,7 @@ class DocumentDecision:
     findings: tuple[Finding, ...]
     families: tuple[str, ...]
     advisory_families: tuple[str, ...]
+    detector_runs: tuple[DetectorRun, ...] = ()
 
     @property
     def scan_complete(self) -> bool:
@@ -123,6 +126,7 @@ class DocumentDecision:
             "scan_complete": self.scan_complete,
             "incomplete_reasons": list(self.incomplete_reasons),
             "findings": [_serialize_finding(finding) for finding in self.findings],
+            "detector_runs": [asdict(run) for run in self.detector_runs],
         }
 
 
@@ -269,6 +273,7 @@ class RAGPipelineGuard:
 
     def _document_decision(
         self, document: Document, index: int, findings: Sequence[Finding],
+        detector_runs: tuple[DetectorRun, ...] = (),
     ) -> DocumentDecision:
         families = sorted({finding.family for finding in findings if finding.family})
         effective = {
@@ -276,6 +281,7 @@ class RAGPipelineGuard:
             if finding.family and not self._is_advisory(finding)
         }
         return DocumentDecision(
+            detector_runs=detector_runs,
             document_id=resolve_document_id(document),
             document_index=index,
             source=document.source,
@@ -352,9 +358,12 @@ class RAGPipelineGuard:
                 if index not in seen:
                     by_index.setdefault(index, []).append(finding)
                     seen.add(index)
+        runs_by_index = {run.document_index: (run,) for run in detector_runs}
         return BatchDecision(
             documents=tuple(
-                self._document_decision(document, index, by_index.get(index, []))
+                self._document_decision(
+                    document, index, by_index.get(index, []), runs_by_index.get(index, ()),
+                )
                 for index, document in enumerate(docs)
             ),
             report=report,

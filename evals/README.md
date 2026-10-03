@@ -375,9 +375,16 @@ clean and attacked case sets. Preserve the original benchmark's security and uti
 judgments, raw traces, failed executions, tool configuration, and defense settings.
 Classifying a saved tool-output string is not an acceptable substitute.
 
-Each exported artifact must have `schema_version: 1`, `benchmark`,
+Each exported artifact must have `schema_version: 2`, `benchmark`,
 `benchmark_revision`, `model`, `model_revision`, `seed`, `judging_method`, `defense`,
-and a nonempty `records` list. Each record needs `case_id`, `condition`
+a nonempty `generation_config` JSON object with finite values, a lowercase 64-character
+`input_sha256` digest of the common pre-defense inputs and prompt protocol,
+and a nonempty `records` list. Generation settings and input digests must match
+between arms; include sampling, token limits, tokenizer/template configuration and
+other behavior-affecting settings in the configuration. Existing v1 artifacts are
+historical evidence and cannot be compared by this stricter importer; rerun their
+producer to obtain v2 artifacts rather than inventing missing provenance.
+Each record needs `case_id`, `condition`
 (`clean` or `attacked`), `status` (`ok` or `error`), boolean `task_success` for valid
 runs, and boolean `attack_success` for valid attacked runs. Clean `attack_success`
 and both success fields for error runs must be null. Baseline/defended provenance
@@ -471,3 +478,13 @@ poor base recall are retained in the report; no ceiling was relaxed and no
 holdout-driven threshold replacement was performed. The enhanced canonical
 wrapper, class/source confounding, and unknown model-training overlap remain
 material limitations of these comparisons.
+
+
+Evaluation completeness: `run.py` records scanner completeness and sanitized error
+classes. Incomplete or failed cases remain unknown, never true detections or safe
+negatives. Overall/category rates retain all-case denominators and are lower
+bounds when coverage is incomplete; explicit detection/FPR bounds and unknown
+counts accompany them. Confusion matrices and Wilson intervals use completed
+scans only. Quality gates reject any unknown cases as well as malformed, nonfinite,
+out-of-range thresholds or unknown split names. Known splits excluded by an
+explicit `--split` selection remain intentionally unevaluated.

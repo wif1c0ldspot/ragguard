@@ -28,7 +28,7 @@
     },
     "schemaVersion": {
       "description": "Report schema version; equals the value announced in the ready message.",
-      "const": "1.2"
+      "const": "1.3"
     },
     "requestId": {
       "type": "string",

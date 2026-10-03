@@ -28,7 +28,7 @@ def by_family(report, family: str):
 
 
 def test_ruleset_version_bumped():
-    assert RULESET_VERSION == "2026.10.3"
+    assert RULESET_VERSION == "2026.10.3.1"
 
 
 def test_canonicalize_unchanged_by_deobfuscation():

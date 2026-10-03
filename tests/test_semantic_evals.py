@@ -33,6 +33,19 @@ class StubScorer:
         return (0.9 if "Ignore" in text else 0.1), len(text.split())
 
 
+@pytest.mark.parametrize("mode", ["rules", "model", "combined"])
+def test_completed_mode_rows_preserve_coverage_and_confusion(mode):
+    rows = semantic.score_rows([
+        entry("attack"), entry("clean", label="benign", text="Useful facts"),
+    ], StubScorer())
+    report = semantic.summarize_mode(rows, mode=mode, threshold=0.5)
+    scored = report["scored_only"]
+    assert scored["coverage"] == {"total": 2, "scored": 2, "unknown": 0, "errors": 0}
+    assert scored["confusion"]["tp"] == 1
+    assert scored["confusion"]["tn"] == 1
+    assert report["full_denominator_bounds"]["attack_detection_rate"] == [1.0, 1.0]
+
+
 def test_hash_selection_is_deterministic_outcome_independent_and_variant_paired():
     rows = [entry(f"a-{i}", split="holdout" if i % 2 else "dev", origin=str(i)) for i in range(30)]
     chosen = semantic.select_rows(rows, seed="seed", limit_per_split=4)

@@ -98,7 +98,8 @@ Character budgets bound the text supplied; they are not token or monetary caps.
 `BatchDecision.detector_runs` contains per-occurrence elapsed seconds, status,
 detection count, and optional adapter-reported tokens and USD cost. These usage
 values are not independently verified. Unknown usage is `None`, never inferred
-as zero. Failed calls may incur costs that the adapter cannot report. Report schema 1.2 serializes this telemetry in batch `detector_runs`,
+as zero. Failed calls may incur costs that the adapter cannot report. Report schema 1.3 serializes this telemetry in batch and per-document `detector_runs`,
+including `evaluate()` and `ingest()` results,
 including optional `DetectorProvenance` (adapter, model ID/revision, configuration
 and calibration SHA-256). Unknown provenance remains null. Single-document
 `evaluate` and `ingest` do not retain run telemetry; use `evaluate_batch` when

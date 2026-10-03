@@ -189,6 +189,10 @@ def summarize_mode(
                 "category": row["category"],
                 "split": row["split"],
                 "decision": decision,
+                # This list contains only completed rows for the selected mode.
+                # Missing completeness is deliberately unknown to run.summarize.
+                "scan_complete": True,
+                "error_type": None,
                 "families": [],
                 "latency_ms": row["rule_latency_ms"]
                 if mode == "rules"

@@ -9,7 +9,9 @@ from evals import outcomes
 
 def artifact(tmp_path, name, *, error=False, protected=False):
     data = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "generation_config": {"do_sample": False, "max_new_tokens": 24},
+        "input_sha256": "a" * 64,
         "benchmark": "fixture",
         "benchmark_revision": "test",
         "model": "stub",
@@ -72,6 +74,22 @@ def test_unpaired_or_invalid_results_fail_closed(tmp_path, mutation):
         data["records"].append(data["records"][0])
     else:
         data["records"][0]["status"] = "error"
+    defended.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        outcomes.compare(baseline, defended)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schema_version", 1), ("generation_config", {}),
+    ("generation_config", {"temperature": float("nan")}),
+    ("generation_config", {"max_new_tokens": 12}),
+    ("input_sha256", "b" * 64), ("input_sha256", "bad"),
+])
+def test_pairing_requires_versioned_finite_configuration_and_inputs(tmp_path, field, value):
+    baseline = artifact(tmp_path, "baseline")
+    defended = artifact(tmp_path, "defended")
+    data = json.loads(defended.read_text())
+    data[field] = value
     defended.write_text(json.dumps(data))
     with pytest.raises(ValueError):
         outcomes.compare(baseline, defended)

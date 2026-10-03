@@ -17,7 +17,7 @@
   "$defs": {
     "schemaVersion": {
       "description": "Version of this report format.",
-      "const": "1.2"
+      "const": "1.3"
     },
     "rulesetVersion": {
       "description": "Version of the detection ruleset that produced the findings.",
@@ -198,7 +198,8 @@
         "advisory_families",
         "findings",
         "scan_complete",
-        "incomplete_reasons"
+        "incomplete_reasons",
+        "detector_runs"
       ],
       "properties": {
         "id": {
@@ -255,6 +256,12 @@
         },
         "incomplete_reasons": {
           "$ref": "#/$defs/familyList"
+        },
+        "detector_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/detectorRun"
+          }
         }
       },
       "allOf": [

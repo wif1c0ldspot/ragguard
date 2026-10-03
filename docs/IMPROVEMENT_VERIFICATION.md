@@ -5,13 +5,29 @@ accuracy on named datasets, and prevention of downstream attacker goals. They
 are not interchangeable. A complete scan can miss an attack; an incomplete scan
 must not look clean. A detected document does not prove an agent was protected.
 
+## Architecture follow-up
+
+The 0.4.0a2 follow-up separates shared domain types and normalization from scanning,
+preserving public import identities. Scalar metadata text consumes the declared budget;
+identical normalized vectors no longer fail exact fidelity checks; cross-owner assessment
+computes only eligible pairs. Detector tracebacks suppress provider messages.
+
+Evaluation errors and incomplete scans remain unknown rather than true positives;
+quality gates reject them and reject invalid/nonfinite threshold configuration.
+Paired outcome schema 2 requires identical generation settings and a shared input digest.
+Historical schema 1 artifacts remain unchanged and require their historical comparator.
+
+Release builds now smoke-test the exact final wheel and npm archive before copying
+files for publication. The maintained optional ML dependency set resolves in CI;
+historical package pins remain explicit provenance, not the recommended installation.
+
 ## Correctness contracts
 
-Report schema 1.2 adds `scan_complete` on document, batch and exported reports,
+Report schema 1.3 retains `scan_complete` on document, batch and exported reports,
 `incomplete_reasons` on documents, versioned `owasp_mappings` on findings, and
-`detector_runs` with optional model/configuration provenance on batches. Consumers
-of strict 1.1 schemas must upgrade. Worker protocol framing remains version 1;
-its handshake now announces report schema 1.2.
+`detector_runs` with optional model/configuration provenance on batches and each document, including single-document convenience APIs. Consumers
+of strict older schemas must upgrade. Worker protocol framing remains version 1;
+its handshake now announces report schema 1.3.
 
 Decoder segment, byte and attempt exhaustion produces a `scan_incomplete`
 finding. Metadata traversal has node and character budgets. The normal guard

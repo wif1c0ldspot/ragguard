@@ -21,8 +21,12 @@ and [license](https://huggingface.co/protectai/deberta-v3-base-prompt-injection-
 The base Ragguard installation is unchanged and has no ML runtime dependency.
 The recorded evaluation used Python 3.12.13 on macOS arm64 with PyTorch 2.8.0,
 Transformers 4.57.1 and SentencePiece 0.2.1. Exact package versions are in
-[`evals/requirements-semantic.txt`](../evals/requirements-semantic.txt). These
-record one environment; platform-specific wheel availability can differ.
+[`evals/environments/semantic-0.4.0a1.json`](../evals/environments/semantic-0.4.0a1.json).
+This historical environment has dependency advisories and is not the maintained runtime.
+New runs use the compatible pins in `evals/requirements-semantic.txt` (PyTorch 2.14.0,
+Transformers 5.10.1, SentencePiece 0.2.2); Python 3.12 and macOS arm64 >=14 are
+validated. `mpmath` stays below 1.4 because SymPy requires it. Historical report
+bytes are preserved; new measurements are recorded separately.
 
 From the repository root, create a separate runtime:
 
@@ -108,3 +112,13 @@ its card, so external results are not proof of held-out generalization. The
 corpora also measure text classification, not successful compromise of a live
 agent or prevention of tool side effects. A paired model probe, if reported, is a
 separate experiment with its own model, sample size and outcome definition.
+
+## Maintained-runtime verification
+
+The 0.4.0a2 measurement in [`semantic-protectai-current.json`](../evals/reports/semantic-protectai-current.json)
+uses the maintained requirements and the same pinned model, all 2,447 examples,
+dev/holdout split and fixed 5% dev FPR ceiling. There were no model errors.
+Base model recall remains 0/357, rules/combined 34/357; enhanced model 88/357,
+rules/combined 357/357. All policies flag 0/93 benign holdout inputs. The negative
+incremental-recall result remains unchanged. Raw floating-point scores can differ
+across runtime versions; both sets of raw records remain available.

@@ -18,7 +18,7 @@ related-risk mappings. These annotations describe relevant risks; they do not
 certify OWASP compliance or prevention of an entire category.
 
 The default scanner is local and explainable: 19 named text families (ruleset
-`2026.10.3`) plus three vector-store checks. Optional pinned local classifiers
+`2026.10.3.1`) plus three vector-store checks. Optional pinned local classifiers
 use separate measured calibration and remain disabled by default.
 
 **Measured limits:** the default policy detects 35% of the bundled synthetic
@@ -37,7 +37,7 @@ it is a development smoke probe, not a production security benchmark.
 **Enforcement:** use `ContentBoundary` to withhold review, rejection, errors and
 incomplete scans before releasing text. A clean, complete scan means the configured
 checks finished without findings; it does not mean the content is safe. Report
-schema **1.2** adds completeness and detector provenance; strict 1.1 consumers must
+schema **1.3** preserves completeness and adds per-document detector audits; strict older consumers must
 upgrade. See the [verification record](docs/IMPROVEMENT_VERIFICATION.md).
 
 ---
@@ -450,7 +450,7 @@ report = guard.scanner.scan_documents([Document(text="Ignore all previous instru
 guard.export_report(report, "scan-report.json")
 
 schema = load_schema("report")       # or load_schema("worker-protocol")
-print(schema["$defs"]["schemaVersion"]["const"])   # 1.2
+print(schema["$defs"]["schemaVersion"]["const"])   # 1.3
 
 # Validation needs a JSON Schema library (jsonschema is in the dev dependency group).
 import jsonschema
@@ -459,7 +459,7 @@ with open("scan-report.json", encoding="utf-8") as handle:
     jsonschema.Draft202012Validator(schema).validate(json.load(handle))
 ```
 
-Every report carries `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.2`) and
+Every report carries `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.3`) and
 `ruleset_version` (`RULESET_VERSION`). The schemas ship as package data, so `load_schema` works
 from an installed wheel.
 
@@ -477,7 +477,7 @@ print(canonicalize("&#x49;gnore​  PREVIOUS"))   # ignore previous
 harnesses. On startup it writes one handshake line:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3", "schema_version": "1.2", "package_version": "0.4.0a1"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3.1", "schema_version": "1.3", "package_version": "0.4.0a2"}
 ```
 
 `package_version` is `0+unknown` when the worker runs from a source tree that is not installed.
@@ -501,10 +501,10 @@ uv run python evals/run.py                                  # console summary
 uv run python evals/run.py --check evals/thresholds.json    # regression gate (runs in CI)
 ```
 
-Current results for ruleset `2026.10.3` with `RAGPipelineGuard(auto_reject=True)` and the default
+Current results for ruleset `2026.10.3.1` with `RAGPipelineGuard(auto_reject=True)` and the default
 review floor, on all entries:
 
-| Metric | 2026.10.3 | 2026.09.1 (0.1.x policy) |
+| Metric | 2026.10.3.1 | 2026.09.1 (0.1.x policy) |
 |---|---|---|
 | Attack detection (review or reject) | **35.0%** | 25.0% |
 | Benign false-positive rate | **5.1%** | 9.0% |
@@ -598,6 +598,16 @@ injection, metadata tool-call hijacking, chunk-splitting, canonical/encoding byp
 anomalies, cross-user proximity and pipeline integration — each showing the payload, the
 findings, and the remediation text.
 
+## Architecture correctness follow-up
+
+Version 0.4.0a2 separates shared domain types and normalization from scanning,
+retains detector audits in single-document results, and tightens metadata/vector
+resource contracts. Evaluation gates reject incomplete work and malformed limits.
+Updated real-model runs preserve the negative findings; see
+[maintained classifier results](docs/MODEL_EVALUATION.md#maintained-runtime-verification)
+and [paired schema 2 probe](docs/RAG_GENERATION_PROBE.md#maintained-runtime-schema-2-run).
+Release verification exercises the exact final artifacts before publication.
+
 ## Roadmap
 
 - [x] CI workflow (lint, type check, tests, demo smoke test, installed-wheel check)
@@ -639,8 +649,8 @@ For a proposed local-first ingestion, chunking, ranking and evaluation pipeline,
 
 ### Release compatibility and evaluation work
 
-This tree targets the `0.4.0a1` alpha release with report schema `1.2` and ruleset
-`2026.10.3`. See [verification and remaining experiments](docs/IMPROVEMENT_VERIFICATION.md)
+This tree targets the `0.4.0a2` alpha release with report schema `1.3` and ruleset
+`2026.10.3.1`. See [verification and remaining experiments](docs/IMPROVEMENT_VERIFICATION.md)
 for completeness semantics, external benchmark results, optional offline model
 calibration and executable memory/action boundaries. Strict schema consumers
 must upgrade from 1.1; existing OWASP 2025 strings remain intact alongside

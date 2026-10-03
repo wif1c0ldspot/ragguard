@@ -5,6 +5,19 @@ All notable changes to ragguard. Format: keep-a-changelog; versions follow the p
 
 ## [Unreleased]
 
+## [0.4.0a2] — 2026-10-03
+
+Ruleset `2026.10.3.1`; report schema `1.3`; paired outcome schema `2`.
+
+- Separate incomplete/error evaluations from detected attacks and validate every threshold.
+- Suppress raw provider exception chains and retain detector audits in single-document APIs.
+- Count scalar metadata against budgets, avoid identical-vector false findings, and
+  compute only eligible cross-owner vector pairs.
+- Extract shared domain types and normalization while preserving public imports.
+- Require matching generation configuration and input digests for paired outcomes.
+- Maintain compatible optional model-runtime pins separately from historical provenance.
+- Smoke-test the exact reproducible wheel and npm archive before release publication.
+
 ## [0.4.0a1] — 2026-10-03
 
 Ruleset `2026.10.3`; report schema `1.2`.

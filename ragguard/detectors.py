@@ -172,12 +172,12 @@ def run_detector(
             _validate_result(result, config)
             if config.max_elapsed_seconds is not None and elapsed > config.max_elapsed_seconds:
                 raise ValueError("semantic detector elapsed-time budget exceeded")
-        except Exception as exc:
+        except Exception:
             elapsed = time.perf_counter() - started
             runs.append(DetectorRun(index, elapsed, "error"))
             raise DetectorError(
                 f"Semantic detector failed at document index {index}", tuple(runs),
-            ) from exc
+            ) from None
         runs.append(DetectorRun(index, elapsed, "ok", len(result.detections),
                                 result.input_tokens, result.output_tokens, result.cost_usd,
                                 result.provenance))

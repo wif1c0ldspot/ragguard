@@ -55,7 +55,7 @@ from ragguard.scanner import (
 if TYPE_CHECKING:
     from ragguard.vector_check import VectorAssessment, VectorStoreIntegrityChecker
 
-__version__ = "0.4.0a1"
+__version__ = "0.4.0a2"
 
 # The vector checker needs numpy, which ships in the optional ``vector`` extra.
 # Import it lazily so text scanning and the worker stay standard-library only.

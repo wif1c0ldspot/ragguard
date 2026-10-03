@@ -13,9 +13,9 @@ Download all listed files into one directory, then verify:
 
 ```bash
 sha256sum -c SHA256SUMS       # macOS: shasum -a 256 -c SHA256SUMS
-python -m pip install ./ragguard-0.4.0a1-py3-none-any.whl
+python -m pip install ./ragguard-0.4.0a2-py3-none-any.whl
 # Optional vector checks:
-python -m pip install './ragguard-0.4.0a1-py3-none-any.whl[vector]'
+python -m pip install './ragguard-0.4.0a2-py3-none-any.whl[vector]'
 ```
 
 The Python base package has no runtime dependencies. The optional vector extra
@@ -34,13 +34,15 @@ downloaded from the same release is not an independent signature.
 4. From the clean committed checkout, run:
 
    ```bash
-   uv run --no-project --python 3.12 python scripts/build_release.py --tag v0.4.0a1
+   uv run --no-project --python 3.12 python scripts/build_release.py --tag v0.4.0a2
    ```
 
    This exports the committed tree into two fresh directories, excluding ignored
    local build outputs. It uses pinned build dependencies, `npm ci`, the commit
    timestamp and two builds. It refuses mismatched bytes and emits wheel, sdist, npm tarball,
-   environment metadata and SHA-256 checksums. This verifies reproducibility
+   environment metadata and SHA-256 checksums. Before copying any output, it installs
+   the exact wheel in an isolated environment, checks its schemas and worker, and
+   runs a real harness smoke test against the exact unpacked npm archive. This verifies reproducibility
    within one environment, not across arbitrary operating systems or toolchains.
 5. Create and push the matching tag. The release workflow reruns the complete CI
    suite, checks that the commit belongs to main, rebuilds twice and publishes

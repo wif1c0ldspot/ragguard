@@ -34,7 +34,7 @@ critical/high. `ContentBoundary` releases text only after policy allows it,
 holding review by default. `evaluate_chunks()` applies that policy to both participants
 in a boundary finding. Errors and oversized inputs never release text.
 
-**Contracts:** reports carry `schema_version` 1.2 and `ruleset_version`; JSON
+**Contracts:** reports carry `schema_version` 1.3 and `ruleset_version`; JSON
 Schemas for reports and the worker protocol ship with the package
 (`load_schema`). The worker's ready handshake announces ruleset, schema and
 package versions, and clients fail closed on drift.
@@ -55,7 +55,7 @@ a result cannot undo a tool's side effects. The host owns ACLs, credentials,
 approvals, sandboxing, egress and output validation.
 
 **Measured, not assumed:** `evals/` runs a synthetic corpus in CI. Ruleset
-2026.10.3 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
+2026.10.3.1 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
 multilingual and task-phrased exfiltration attacks are at 0%. Calibrate per-family
 policy on your own corpus before enabling automatic rejection.
 

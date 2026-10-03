@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,24 @@ IDENTITY_FIELDS = ("benchmark", "benchmark_revision", "model", "model_revision",
 
 def load_outcomes(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
-        raise ValueError("outcome artifact requires schema_version 1")
+    if not isinstance(data, dict) or data.get("schema_version") != 2:
+        raise ValueError(
+            "outcome artifact requires schema_version 2; legacy artifacts lack pairing guarantees",
+        )
     for field in (*IDENTITY_FIELDS, "judging_method", "defense"):
         if field not in data or data[field] is None or data[field] == "":
             raise ValueError(f"missing outcome provenance {field}")
+    configuration = data.get("generation_config")
+    if not isinstance(configuration, dict) or not configuration:
+        raise ValueError("generation_config must be a nonempty JSON object")
+    try:
+        json.dumps(configuration, allow_nan=False, sort_keys=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("generation_config must contain finite JSON values") from exc
+    if not isinstance(data.get("input_sha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", data["input_sha256"]
+    ):
+        raise ValueError("input_sha256 must identify the common pre-defense inputs and protocol")
     records = data.get("records")
     if not isinstance(records, list) or not records:
         raise ValueError("outcome artifact must contain records")
@@ -86,8 +100,9 @@ def summarize(records: list[dict[str, Any]], condition: str) -> dict[str, Any]:
 
 def compare(baseline_path: Path, defended_path: Path) -> dict[str, Any]:
     baseline, defended = load_outcomes(baseline_path), load_outcomes(defended_path)
-    for field in (*IDENTITY_FIELDS, "judging_method"):
-        if baseline[field] != defended[field]:
+    for field in (*IDENTITY_FIELDS, "judging_method", "generation_config", "input_sha256"):
+        if (json.dumps(baseline[field], sort_keys=True)
+                != json.dumps(defended[field], sort_keys=True)):
             raise ValueError(f"unpaired outcome provenance: {field}")
     index = lambda data: {(r["case_id"], r["condition"]): r for r in data["records"]}  # noqa: E731
     left, right = index(baseline), index(defended)
@@ -97,6 +112,8 @@ def compare(baseline_path: Path, defended_path: Path) -> dict[str, Any]:
         "evaluation": "paired_external_agent_outcomes",
         "provenance": {field: baseline[field] for field in IDENTITY_FIELDS},
         "judging_method": baseline["judging_method"],
+        "generation_config": baseline["generation_config"],
+        "input_sha256": baseline["input_sha256"],
         "artifact_sha256": {
             "baseline": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
             "defended": hashlib.sha256(defended_path.read_bytes()).hexdigest(),

@@ -88,6 +88,34 @@ def test_metadata_char_budget_counts_keys_and_values(metadata):
     assert [f.evidence for f in incomplete(report)] == ["metadata_char_limit"]
 
 
+@pytest.mark.parametrize("value", [123456, -123456, 12.5, True, False])
+def test_metadata_scalar_text_counts_toward_character_budget(value):
+    text_length = len(str(value))
+    complete = RAGScanner(max_metadata_chars=1 + text_length).scan_documents([
+        Document("Clean", {"n": value}),
+    ])
+    incomplete_report = RAGScanner(max_metadata_chars=text_length).scan_documents([
+        Document("Clean", {"n": value}),
+    ])
+    assert complete.scan_complete
+    assert [f.evidence for f in incomplete(incomplete_report)] == ["metadata_char_limit"]
+
+
+def test_oversized_integer_is_rejected_before_decimal_conversion():
+    # Exceeds Python's default integer-to-string digit limit; conversion would
+    # raise instead of returning an explicit coverage finding.
+    value = 10 ** 10_000
+    report = RAGScanner(max_metadata_chars=8).scan_documents([Document("Clean", {"n": value})])
+    assert [f.evidence for f in incomplete(report)] == ["metadata_char_limit"]
+
+
+def test_metadata_scalar_budget_is_shared_across_leaves():
+    report = RAGScanner(max_metadata_chars=8).scan_documents([
+        Document("Clean", {"n": [1234, 5678]}),
+    ])
+    assert [f.evidence for f in incomplete(report)] == ["metadata_char_limit"]
+
+
 def test_metadata_limits_preserve_already_detected_findings():
     report = RAGScanner(max_metadata_nodes=2).scan_documents([
         Document("Clean", {"first": PAYLOAD, "second": "later"}),

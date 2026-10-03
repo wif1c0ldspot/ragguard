@@ -1,5 +1,6 @@
 """Deterministic contract tests; these do not measure model accuracy."""
 
+import traceback
 from dataclasses import FrozenInstanceError, asdict
 
 import pytest
@@ -146,6 +147,12 @@ def test_provider_failure_retains_completed_runs_and_runs_regex_first():
     assert events == ["regex", "semantic-0", "semantic-1"]
     assert [run.status for run in error.value.runs] == ["ok", "error"]
     assert "private provider details" not in str(error.value)
+    rendered = "".join(traceback.format_exception(error.value))
+    assert "private provider details" not in rendered
+    assert "RuntimeError" not in rendered
+    assert "Semantic detector failed at document index 1" in rendered
+    assert error.value.__cause__ is None
+    assert error.value.__suppress_context__
 
 
 def test_latency_limit_is_checked_after_return(monkeypatch):
@@ -210,3 +217,47 @@ def test_provenance_requires_actual_sha256_fields(field):
         RAGPipelineGuard(detector=StubDetector(DetectorResult(provenance=invalid))).evaluate(
             Document("Reference"),
         )
+
+
+@pytest.mark.parametrize("api", ["evaluate", "ingest"])
+def test_single_document_preserves_detector_usage_and_provenance(api):
+    import jsonschema
+
+    from ragguard.detectors import DetectorProvenance
+
+    provenance = DetectorProvenance("adapter", "model", "a" * 40, "b" * 64, "c" * 64)
+    guard = RAGPipelineGuard(detector=StubDetector(DetectorResult(
+        input_tokens=17, output_tokens=2, cost_usd=0.004, provenance=provenance,
+    )))
+    if api == "evaluate":
+        decision = guard.evaluate(Document("Reference"))
+        assert decision.detector_runs[0].provenance == provenance
+        result = decision.to_dict()
+        schema = load_schema("report")
+        jsonschema.validate(result, {**schema, "oneOf": [{"$ref": "#/$defs/documentResult"}]})
+    else:
+        result = guard.ingest("Reference")
+        jsonschema.validate(result, load_schema("report"))
+    (run,) = result["detector_runs"]
+    assert run["document_index"] == 0
+    assert run["status"] == "ok"
+    assert run["input_tokens"] == 17
+    assert run["output_tokens"] == 2
+    assert run["cost_usd"] == 0.004
+    assert run["provenance"] == asdict(provenance)
+
+
+def test_document_audits_are_correlated_by_occurrence():
+    batch = RAGPipelineGuard(detector=StubDetector()).evaluate_batch([
+        Document("same"), Document("same"),
+    ])
+    assert [document.detector_runs for document in batch.documents] == [
+        (batch.detector_runs[0],), (batch.detector_runs[1],),
+    ]
+    assert [document.detector_runs[0].document_index for document in batch.documents] == [0, 1]
+
+
+def test_single_document_without_detector_has_empty_audit():
+    guard = RAGPipelineGuard()
+    assert guard.evaluate(Document("Reference")).detector_runs == ()
+    assert guard.ingest("Reference")["detector_runs"] == []

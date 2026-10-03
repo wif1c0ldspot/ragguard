@@ -31,6 +31,7 @@ def test_confusion_and_wilson_intervals_cover_zero_and_full_rates():
             decision="reject",
             families=[],
             latency_ms=1,
+            scan_complete=True,
         ),
         dict(
             id="b",
@@ -40,6 +41,7 @@ def test_confusion_and_wilson_intervals_cover_zero_and_full_rates():
             decision="accept",
             families=[],
             latency_ms=1,
+            scan_complete=True,
         ),
     ]
     report = runner.summarize(records)
@@ -48,7 +50,8 @@ def test_confusion_and_wilson_intervals_cover_zero_and_full_rates():
         "tn": 1,
         "fp": 0,
         "fn": 0,
-        "positive_definition": "decision != accept",
+        "positive_definition": "completed decision != accept",
+        "unknown_attack": 0, "unknown_benign": 0,
     }
     assert runner.wilson_interval(0, 0) is None
     assert runner.wilson_interval(0, 100) == [0.0, 0.036993]

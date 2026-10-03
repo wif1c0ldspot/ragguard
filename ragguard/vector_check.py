@@ -271,7 +271,11 @@ class VectorStoreIntegrityChecker:
                         f"Invalid re-embedding at document index {index}: dimension "
                         f"{vector.size} does not match stored dimension {dimension}"
                     )
-                similarity = float(np.clip(stored[start + offset] @ vector, -1, 1))
+                original = stored[start + offset]
+                # Identical normalized vectors have cosine one mathematically;
+                # their rounded self-dot product can be just below one.
+                similarity = (1.0 if np.array_equal(original, vector)
+                              else float(np.clip(original @ vector, -1, 1)))
                 if similarity >= min_similarity:
                     continue
                 document = documents[index]
@@ -341,13 +345,29 @@ class VectorStoreIntegrityChecker:
             return cached
 
         n = len(indices)
+        if owner_codes is not None:
+            # Compute only eligible cross-owner pairs, once each. Filtering a
+            # dense tile afterward spends work excluded from max_comparisons.
+            for i in range(n):
+                eligible = np.flatnonzero(owner_codes[i + 1:] != owner_codes[i]) + i + 1
+                for start in range(0, len(eligible), self.block_size):
+                    positions = eligible[start:start + self.block_size]
+                    similarities = np.clip(matrix[positions] @ matrix[i], -1, 1)
+                    for position in np.flatnonzero(similarities > self.similarity_threshold):
+                        j = int(positions[position])
+                        text_similarity = _feature_similarity(text_features(i), text_features(j))
+                        if text_similarity >= TEXT_SIMILARITY_CEILING:
+                            continue
+                        self._append(findings, self._pair_finding(
+                            documents, owners, indices[i], indices[j],
+                            float(similarities[position]), text_similarity,
+                        ))
+            return self._coverage(findings, documents, indices, pair_count)
         for start in range(0, n, self.block_size):
             stop = min(start + self.block_size, n)
             tile = self._similarity_tile(matrix, start, stop)
             # Column c of the tile is position start + c; keep only j > i.
             mask = np.triu(tile > self.similarity_threshold, k=1)
-            if owner_codes is not None:
-                mask &= owner_codes[start:stop, None] != owner_codes[None, start:]
             # Row-major nonzero order preserves ascending (i, j) finding order.
             for row, col in zip(*np.nonzero(mask), strict=True):
                 i, j = start + int(row), start + int(col)

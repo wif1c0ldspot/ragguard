@@ -11,8 +11,11 @@ jobs:
   verify:
     uses: ./.github/workflows/test.yml
 
+  verify-semantic-runtime:
+    uses: ./.github/workflows/semantic-runtime.yml
+
   build:
-    needs: verify
+    needs: [verify, verify-semantic-runtime]
     runs-on: ubuntu-latest
     env:
       UV_PYTHON: '3.12'

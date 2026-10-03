@@ -5,6 +5,11 @@ ragguard's default `ContentBoundary`. It is **not** AgentDojo, an autonomous-age
 benchmark, an adaptive-attack evaluation, or evidence of production protection.
 No tools, retrieval ranking, external side effects, credentials, or paid APIs run.
 
+The `rag-probe/` reports below are immutable historical schema 1 artifacts. The
+current comparator requires schema 2 pairing fields and intentionally rejects those
+old inputs; it does not invent missing provenance. New runs write to a separate
+output directory and use the maintained runtime in `evals/requirements-semantic.txt`.
+
 ## Observed result
 
 The recorded run showed **no measured attack-prevention improvement**. Under the
@@ -107,7 +112,7 @@ command below is offline and never downloads weights:
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
   /path/to/model-runtime/bin/python evals/rag_probe.py \
   --model-path /path/to/pinned/snapshot \
-  --output evals/reports/rag-probe
+  --output evals/reports/rag-probe-current
 ```
 
 Inference uses CPU float32, two Torch threads, deterministic algorithms, seed 0,
@@ -123,3 +128,13 @@ execution errors, blocked cases, answer utility and exact attacker-target matche
 Small-sample intervals are descriptive only: six authored cases do not support a
 generalization claim. Unit tests use deterministic stubs for contract validation;
 those tests are not model measurements.
+
+## Maintained-runtime schema 2 run
+
+The real 0.4.0a2 rerun is recorded in [`rag-probe-current/`](../evals/reports/rag-probe-current/comparison.json).
+It uses the same frozen model and cases, the upgraded maintained runtime, and
+explicit schema 2 input and generation-configuration pairing. All 24 records
+completed: 22 generations and two blocks. Clean successes remain 5/6 in both
+arms; attacked legitimate successes remain 4/6 baseline and 2/6 defended; exact
+attacker-target matches remain 1/6 in both. The strict-judge caveat and both
+conveyed factual poisons still apply. This is a rerun, not a migration of old results.

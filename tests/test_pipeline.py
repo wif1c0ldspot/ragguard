@@ -434,7 +434,7 @@ def test_result_key_shapes_are_stable():
     assert list(batch["documents"][0]) == [
         "id", "document_id", "document_index", "source", "accepted", "review_required",
         "decision", "findings_count", "families", "advisory_families", "scan_complete",
-        "incomplete_reasons", "findings",
+        "incomplete_reasons", "findings", "detector_runs",
     ]
 
 

@@ -182,22 +182,30 @@ def run_entries(
     records = []
     for entry in entries:
         start = time.perf_counter()
-        if mode == "chunks":
-            from ragguard import Document
+        decisions = []
+        error_type = None
+        try:
+            if mode == "chunks":
+                from ragguard import Document
 
-            batch = guard.evaluate_chunks([
-                Document(chunk["text"], metadata=chunk.get("metadata"), id=f"{entry['id']}:{i}")
-                for i, chunk in enumerate(entry["chunks"])
-            ], window_chars=entry["window_chars"])
-            decisions = [document.decision.value for document in batch.documents]
-            result = {
-                "decision": ("reject" if "reject" in decisions else
-                             "review" if "review" in decisions else "accept"),
-                "families": [family for document in batch.documents
-                             for family in document.families],
-            }
-        else:
-            result = guard.ingest(entry["text"], entry.get("metadata"), id=entry["id"])
+                batch = guard.evaluate_chunks([
+                    Document(chunk["text"], metadata=chunk.get("metadata"), id=f"{entry['id']}:{i}")
+                    for i, chunk in enumerate(entry["chunks"])
+                ], window_chars=entry["window_chars"])
+                decisions = [document.decision.value for document in batch.documents]
+                result = {
+                    "decision": ("reject" if "reject" in decisions else
+                                 "review" if "review" in decisions else "accept"),
+                    "scan_complete": all(document.scan_complete for document in batch.documents),
+                    "families": [family for document in batch.documents
+                                 for family in document.families],
+                }
+            else:
+                result = guard.ingest(entry["text"], entry.get("metadata"), id=entry["id"])
+        except Exception as exc:
+            # Keep failed cases in the denominator without retaining sensitive messages.
+            result = {"decision": "unknown", "families": [], "scan_complete": False}
+            error_type = type(exc).__name__
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         records.append({
             "id": entry["id"],
@@ -205,6 +213,8 @@ def run_entries(
             "category": entry["category"],
             "split": entry["split"],
             "decision": str(result["decision"]),
+            "scan_complete": result.get("scan_complete") is True,
+            "error_type": error_type,
             "families": sorted(set(result.get("families") or [])),
             "latency_ms": elapsed_ms,
             **({"chunk_decisions": decisions} if mode == "chunks" else {}),
@@ -259,22 +269,30 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate per-entry records into the metrics report."""
     attacks = [r for r in records if r["label"] == "attack"]
     benign = [r for r in records if r["label"] == "benign"]
-    detected = [r for r in attacks if r["decision"] != "accept"]
-    blocked = [r for r in attacks if r["decision"] == "reject"]
-    flagged = [r for r in benign if r["decision"] != "accept"]
-    false_blocks = [r for r in benign if r["decision"] == "reject"]
+    def valid(record: dict[str, Any]) -> bool:
+        return record.get("scan_complete") is True and not record.get("error_type")
+
+    scored_attacks = [r for r in attacks if valid(r)]
+    scored_benign = [r for r in benign if valid(r)]
+    unknown_attacks = len(attacks) - len(scored_attacks)
+    unknown_benign = len(benign) - len(scored_benign)
+    detected = [r for r in scored_attacks if r["decision"] != "accept"]
+    blocked = [r for r in scored_attacks if r["decision"] == "reject"]
+    flagged = [r for r in scored_benign if r["decision"] != "accept"]
+    false_blocks = [r for r in scored_benign if r["decision"] == "reject"]
     latencies = [r["latency_ms"] for r in records]
     tp, fp = len(detected), len(flagged)
-    fn, tn = len(attacks) - tp, len(benign) - fp
+    fn, tn = len(scored_attacks) - tp, len(scored_benign) - fp
 
     def by_category(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
         for category in sorted({r["category"] for r in rows}):
             group = [r for r in rows if r["category"] == category]
-            hits = sum(1 for r in group if r["decision"] != "accept")
-            rejects = sum(1 for r in group if r["decision"] == "reject")
+            hits = sum(1 for r in group if valid(r) and r["decision"] != "accept")
+            rejects = sum(1 for r in group if valid(r) and r["decision"] == "reject")
             out[category] = {
                 "count": len(group),
+                "unknown": sum(not valid(r) for r in group),
                 "flagged": hits,
                 "rejected": rejects,
                 key: _rate(hits, len(group)),
@@ -283,8 +301,8 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     families: dict[str, dict[str, Any]] = {}
     for family in sorted({f for r in records for f in r["families"]}):
-        on_attack = sum(1 for r in attacks if family in r["families"])
-        on_benign = sum(1 for r in benign if family in r["families"])
+        on_attack = sum(1 for r in scored_attacks if family in r["families"])
+        on_benign = sum(1 for r in scored_benign if family in r["families"])
         families[family] = {
             "fires_on_attacks": on_attack,
             "fires_on_benign": on_benign,
@@ -293,13 +311,25 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "confusion": {"tp": tp, "fp": fp, "tn": tn, "fn": fn,
-                      "positive_definition": "decision != accept"},
+                      "unknown_attack": unknown_attacks, "unknown_benign": unknown_benign,
+                      "positive_definition": "completed decision != accept"},
+        "rate_denominators": "overall/category rates use all cases (lower bounds when unknown); "
+                             "confusion and confidence intervals use completed scans only",
+        "coverage": {"total": len(records), "scored": len(scored_attacks) + len(scored_benign),
+                     "unknown": unknown_attacks + unknown_benign,
+                     "errors": sum(bool(r.get("error_type")) for r in records)},
+        "all_case_bounds": {
+            "attack_detection_rate": [_rate(tp, len(attacks)),
+                                      _rate(tp + unknown_attacks, len(attacks))],
+            "benign_false_positive_rate": [_rate(fp, len(benign)),
+                                            _rate(fp + unknown_benign, len(benign))],
+        },
         "confidence_intervals_95": {
-            "method": "Wilson; assumes independent Bernoulli observations",
-            "attack_detection_rate": wilson_interval(tp, len(attacks)),
-            "attack_block_rate": wilson_interval(len(blocked), len(attacks)),
-            "benign_false_positive_rate": wilson_interval(fp, len(benign)),
-            "benign_false_block_rate": wilson_interval(len(false_blocks), len(benign)),
+            "method": "Wilson on completed scans; assumes independent Bernoulli observations",
+            "attack_detection_rate": wilson_interval(tp, len(scored_attacks)),
+            "attack_block_rate": wilson_interval(len(blocked), len(scored_attacks)),
+            "benign_false_positive_rate": wilson_interval(fp, len(scored_benign)),
+            "benign_false_block_rate": wilson_interval(len(false_blocks), len(scored_benign)),
             "precision": wilson_interval(tp, tp + fp),
         },
         "overall": {
@@ -323,7 +353,8 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "attack_categories": by_category(attacks, "detection_rate"),
         "benign_categories": by_category(benign, "false_positive_rate"),
         "families": families,
-        "missed_attack_ids": sorted(r["id"] for r in attacks if r["decision"] == "accept"),
+        "missed_attack_ids": sorted(r["id"] for r in scored_attacks if r["decision"] == "accept"),
+        "unknown_ids": sorted(r["id"] for r in records if not valid(r)),
         "false_positive_benign_ids": sorted(r["id"] for r in flagged),
         "false_block_benign_ids": sorted(r["id"] for r in false_blocks),
     }
@@ -347,6 +378,8 @@ def check_thresholds(
     against the ``all`` report. Splits missing from ``reports`` are skipped.
     """
     violations: list[str] = []
+    if not isinstance(thresholds, dict):
+        return ["thresholds must be an object"]
     overall_rules = (
         ("min_attack_detection_rate", "attack_detection_rate", min),
         ("min_attack_block_rate", "attack_block_rate", min),
@@ -359,6 +392,40 @@ def check_thresholds(
     for name in sorted(set(thresholds) - known):
         if not name.startswith("_"):
             violations.append(f"unknown threshold key {name!r}")
+
+    def valid_bound(value: Any, *, latency: bool = False) -> bool:
+        try:
+            return (type(value) in (int, float) and math.isfinite(value)
+                    and value >= 0 and (latency or value <= 1))
+        except OverflowError:
+            return False
+
+    for name in known & thresholds.keys():
+        value = thresholds[name]
+        if name == "max_p95_latency_ms":
+            if not valid_bound(value, latency=True):
+                violations.append(f"{name}: expected finite nonnegative number")
+            continue
+        if not isinstance(value, dict):
+            violations.append(f"{name}: expected split mapping")
+            continue
+        for split, bounds in value.items():
+            if split not in SPLITS:
+                violations.append(f"{name}: unknown split {split!r}")
+            if "category" in name:
+                if not isinstance(bounds, dict) or any(
+                    not isinstance(category, str) or not category or not valid_bound(bound)
+                    for category, bound in bounds.items()
+                ):
+                    violations.append(
+                        f"{name}[{split}]: expected category mapping with rates in [0, 1]",
+                    )
+            elif not valid_bound(bounds):
+                violations.append(f"{name}[{split}]: expected finite rate in [0, 1]")
+    if violations:
+        return violations
+    if reports and any(report.get("coverage", {}).get("unknown", 0) for report in reports.values()):
+        violations.append("incomplete evaluation: unknown cases cannot satisfy quality gates")
 
     def compare(label: str, actual: float | None, bound: float, kind: Any) -> None:
         if actual is None:
@@ -410,6 +477,9 @@ def render_markdown(report: dict[str, Any], split: str, version: str | None) -> 
         f"# ragguard eval — split `{split}`",
         "",
         f"Ruleset version: `{version}`",
+        f"Coverage: {report['coverage']['scored']} completed / "
+        f"{report['coverage']['total']} total; {report['coverage']['unknown']} unknown.",
+        report["rate_denominators"],
         "",
         "| Metric | Value |",
         "|---|---|",
@@ -460,6 +530,8 @@ def render_console(report: dict[str, Any], split: str, version: str | None) -> s
     lat = o["latency_ms"]
     lines = [
         f"ragguard eval  split={split}  ruleset={version}",
+        f"Coverage: {report['coverage']['scored']}/{report['coverage']['total']} complete; "
+        f"{report['coverage']['unknown']} unknown (rates are all-case lower bounds)",
         f"  attacks={o['attack_count']}  benign={o['benign_count']}",
         f"  attack detection rate   {_pct(o['attack_detection_rate'])}",
         f"  attack block rate       {_pct(o['attack_block_rate'])}",

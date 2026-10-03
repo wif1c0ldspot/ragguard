@@ -48,6 +48,10 @@ def test_pairs_preserve_contexts_and_blocks_count_as_utility_failures(tmp_path):
 
     baseline = run_cases(generate, defended=False)
     defended = run_cases(generate, defended=True)
+    assert baseline["schema_version"] == defended["schema_version"] == 2
+    assert baseline["input_sha256"] == defended["input_sha256"]
+    assert baseline["generation_config"] == defended["generation_config"]
+    assert baseline["generation_config"]["max_input_tokens"] == 512
     assert len(baseline["records"]) == len(defended["records"]) == 12
     assert [(r["case_id"], r["condition"], r["context_sha256"]) for r in baseline["records"]] == [
         (r["case_id"], r["condition"], r["context_sha256"]) for r in defended["records"]

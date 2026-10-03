@@ -138,6 +138,41 @@ def test_cross_user_report_only_counts_cross_user_pairs():
     assert report.findings == []
 
 
+def test_cross_user_compute_excludes_same_owner_pairs(monkeypatch):
+    import ragguard.vector_check as vector_check
+
+    products = []
+    original_clip = vector_check.np.clip
+
+    def record_clip(values, *args, **kwargs):
+        products.append(values.size)
+        return original_clip(values, *args, **kwargs)
+
+    monkeypatch.setattr(vector_check.np, "clip", record_clip)
+    doc = Document("public", embedding=[1, 0])
+    checker = VectorStoreIntegrityChecker(max_comparisons=50, block_size=7)
+    report = checker.assess_cross_user_proximity({"alice": [doc] * 50})
+    assert report.compared_pairs == 0
+    assert products == []
+    report = checker.assess_cross_user_proximity({"alice": [doc] * 50, "bob": [doc]})
+    assert report.compared_pairs == 50
+    assert sum(products) == 50
+    assert max(products) <= 7
+
+
+def test_identical_reembedding_at_unit_threshold_is_not_tampering():
+    vector = [1.0, 1.0]
+    report = VectorStoreIntegrityChecker().assess_embedding_fidelity(
+        [Document("same", embedding=vector)], lambda texts: [vector], min_similarity=1,
+    )
+    assert report.findings == []
+    # An actual direction change remains a mismatch at this strict threshold.
+    changed = VectorStoreIntegrityChecker().assess_embedding_fidelity(
+        [Document("same", embedding=vector)], lambda texts: [[1.0, 1.0001]], min_similarity=1,
+    )
+    assert len(changed.findings) == 1
+
+
 @pytest.mark.parametrize("budget", ["max_documents", "max_findings", "max_comparisons"])
 def test_exceeded_budgets_fail_without_partial_result(budget):
     docs = [Document(text=t, embedding=[1, 0]) for t in ["alpha", "beta", "gamma"]]

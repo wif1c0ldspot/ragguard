@@ -65,3 +65,16 @@ def test_import_rejects_invalid_chunk_shapes(chunks):
     case["chunks"] = chunks
     with pytest.raises(ValueError):
         run.validate_entry(case, mode="chunks")
+
+
+def test_incomplete_chunk_scan_is_unknown_not_detection():
+    from ragguard import RAGScanner
+
+    case = _case(["ordinary", "prose"])
+    case["chunks"][0]["metadata"] = {"a": {"b": "c"}}
+    guard = RAGPipelineGuard(scanner=RAGScanner(max_metadata_nodes=1))
+    records = run.run_entries([case], guard, mode="chunks")
+    assert records[0]["scan_complete"] is False
+    report = run.summarize(records)
+    assert report["confusion"]["tp"] == 0
+    assert report["coverage"]["unknown"] == 1

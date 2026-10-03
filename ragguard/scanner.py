@@ -30,68 +30,53 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import html
 import math
 import re
-import unicodedata
 import warnings
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
-from enum import Enum
 from itertools import islice
 from typing import Any
 
-RULESET_VERSION = "2026.10.3"
+from ragguard.domain import (
+    LLM01_PROMPT_INJECTION as LLM01_PROMPT_INJECTION,
+)
+from ragguard.domain import (
+    LLM02_SENSITIVE_INFO as LLM02_SENSITIVE_INFO,
+)
+from ragguard.domain import (
+    LLM04_POISONING as LLM04_POISONING,
+)
+from ragguard.domain import (
+    LLM05_IMPROPER_OUTPUT as LLM05_IMPROPER_OUTPUT,
+)
+from ragguard.domain import (
+    LLM07_SYSTEM_PROMPT as LLM07_SYSTEM_PROMPT,
+)
+from ragguard.domain import (
+    LLM08_VECTOR_WEAKNESSES as LLM08_VECTOR_WEAKNESSES,
+)
 
-# --- OWASP Top 10 for LLM Applications (2025) categories used by the scanner ---
+# Compatibility re-exports: existing ragguard.scanner imports remain valid.
+from ragguard.domain import (
+    Document as Document,
+)
+from ragguard.domain import (
+    Finding as Finding,
+)
+from ragguard.domain import (
+    FindingType as FindingType,
+)
+from ragguard.domain import (
+    ScanReport as ScanReport,
+)
+from ragguard.domain import (
+    Severity as Severity,
+)
+from ragguard.normalization import _Surfaces, _surfaces
+from ragguard.normalization import canonicalize as canonicalize
 
-LLM01_PROMPT_INJECTION = "LLM01: Prompt Injection"
-LLM02_SENSITIVE_INFO = "LLM02: Sensitive Information Disclosure"
-LLM04_POISONING = "LLM04: Data and Model Poisoning"
-LLM05_IMPROPER_OUTPUT = "LLM05: Improper Output Handling"
-LLM07_SYSTEM_PROMPT = "LLM07: System Prompt Leakage"
-LLM08_VECTOR_WEAKNESSES = "LLM08: Vector and Embedding Weaknesses"
-
-
-class Severity(str, Enum):
-    """Vulnerability severity levels."""
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    INFO = "info"
-
-
-class FindingType(str, Enum):
-    """Types of RAG pipeline vulnerabilities detected."""
-    PROMPT_INJECTION_IN_DOCUMENT = "prompt_injection_in_document"
-    METADATA_INJECTION = "metadata_injection"
-    CHUNK_SPLIT_ATTACK = "chunk_split_attack"
-    EMBEDDING_POISONING = "embedding_poisoning"
-    CROSS_USER_CONTAMINATION = "cross_user_contamination"
-    CANONICAL_INJECTION = "canonical_injection"
-    SCAN_INCOMPLETE = "scan_incomplete"
-
-
-@dataclass(frozen=True, kw_only=True)
-class Finding:
-    """A single, immutable security finding from a RAG pipeline scan.
-
-    Construct with keywords; use :func:`dataclasses.replace` to derive variants.
-    """
-    finding_type: FindingType
-    severity: Severity
-    document_id: str
-    description: str
-    evidence: str
-    remediation: str
-    owasp_mapping: str = ""
-    family: str = ""
-    document_index: int | None = None
-    metadata_path: str | None = None
-    related_document_ids: tuple[str, ...] = ()
-    confidence: str = "heuristic"
-    related_document_indices: tuple[int, ...] = ()
+RULESET_VERSION = "2026.10.3.1"
 
 
 @dataclass(frozen=True)
@@ -108,91 +93,6 @@ class PatternFamily:
     owasp: str
     remediation: str
     surface: str = "canonical"
-
-
-# --- Canonicalisation -------------------------------------------------------
-
-_ZERO_WIDTH_RE = re.compile(
-    r"[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e"
-    r"\u2060-\u206f\ufe00-\ufe0f\ufeff\U000e0100-\U000e01ef]"
-)
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _pre_canonical(text: str) -> str:
-    """Canonical text before whitespace collapsing (keeps word separation intact)."""
-    decoded = html.unescape(text)
-    normalised = unicodedata.normalize("NFKC", decoded)
-    return _ZERO_WIDTH_RE.sub("", normalised).lower()
-
-
-def canonicalize(text: str) -> str:
-    """Normalise text so obfuscated payloads match plain-text rules.
-
-    Decodes HTML entities, applies NFKC normalisation, strips zero-width and
-    bidi control characters, collapses all whitespace to single spaces and
-    lowercases the result.
-    """
-    return _WHITESPACE_RE.sub(" ", _pre_canonical(text))
-
-
-# --- Deobfuscation ------------------------------------------------------------
-
-# Curated confusables skeleton in the spirit of Unicode TS #39: lowercase
-# Cyrillic, Greek and Latin-extension look-alikes folded to ASCII. Fullwidth and
-# mathematical alphanumerics are already folded by NFKC during canonicalisation.
-_CONFUSABLES = str.maketrans({
-    # Cyrillic
-    "а": "a", "в": "b", "е": "e", "ё": "e", "о": "o", "р": "p", "с": "c", "у": "y",
-    "х": "x", "і": "i", "ї": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l",
-    "ԛ": "q", "ԝ": "w", "к": "k", "ո": "n", "ս": "u", "т": "t", "м": "m", "н": "h",
-    # Greek
-    "α": "a", "β": "b", "γ": "y", "ε": "e", "ζ": "z", "η": "n", "ι": "i", "κ": "k",
-    "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "ω": "w", "ϲ": "c",
-    "ϳ": "j", "ς": "c",
-    # Latin extensions and IPA
-    "ɡ": "g", "ı": "i", "ȷ": "j", "ɑ": "a", "ɩ": "i", "ɪ": "i", "ʏ": "y", "ɴ": "n",
-    "ʀ": "r", "ꜱ": "s", "ᴏ": "o", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ᴜ": "u", "ᴠ": "v",
-    "ᴡ": "w", "ᴢ": "z", "ʜ": "h", "ʟ": "l", "ᴍ": "m", "ᴛ": "t", "ᴋ": "k", "ᴘ": "p",
-})
-# Runs of >=4 single letters joined by one consistent single separator.
-_SPACED_LETTERS_RE = re.compile(r"(?<![a-z0-9])[a-z]([ .\-])[a-z](?:\1[a-z]){2,}(?![a-z0-9])")
-_SPACED_SEPARATORS_RE = re.compile(r"[ .\-]")
-# Tokens holding at least one leetspeak character; folded only if they hold letters.
-_LEET_TOKEN_RE = re.compile(r"(?<![a-z0-9@$])[a-z@$]*[0-9@$][a-z0-9@$]*")
-_LEET_MAP = str.maketrans({
-    "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s",
-})
-_ASCII_LETTER_RE = re.compile(r"[a-z]")
-
-
-def _fold_leet(match: re.Match[str]) -> str:
-    token = match.group(0)
-    return token.translate(_LEET_MAP) if _ASCII_LETTER_RE.search(token) else token
-
-
-def _deobfuscate(pre_canonical: str) -> str:
-    """Confusables skeleton, letter-spacing collapse and leetspeak folding."""
-    skeleton = pre_canonical.translate(_CONFUSABLES)
-    collapsed = _SPACED_LETTERS_RE.sub(
-        lambda m: _SPACED_SEPARATORS_RE.sub("", m.group(0)), skeleton
-    )
-    return _LEET_TOKEN_RE.sub(_fold_leet, collapsed)
-
-
-@dataclass(frozen=True)
-class _Surfaces:
-    """All match surfaces of one text, computed once per text."""
-    raw: str
-    canonical: str
-    deobfuscated: str | None  # None when identical to ``canonical``
-
-
-def _surfaces(text: str) -> _Surfaces:
-    pre = _pre_canonical(text)
-    canonical = _WHITESPACE_RE.sub(" ", pre)
-    deobfuscated = _WHITESPACE_RE.sub(" ", _deobfuscate(pre))
-    return _Surfaces(text, canonical, None if deobfuscated == canonical else deobfuscated)
 
 
 # --- Encoded payload decoding -----------------------------------------------
@@ -645,7 +545,19 @@ def _metadata_leaves(value: Any, path: str = "", *, key: str = "", depth: int = 
     elif value is None or isinstance(value, (bool, int, float)):
         if isinstance(value, float) and not math.isfinite(value):
             raise ValueError("metadata numbers must be finite")
-        yield path, key, "" if value is None else str(value)
+        if budget is not None and isinstance(value, int) and not isinstance(value, bool):
+            # A conservative decimal-length lower bound rejects oversized integers
+            # before str() allocates or performs expensive decimal conversion.
+            minimum_chars = max(1, (value.bit_length() - 1) * 301 // 1000 + 1)
+            minimum_chars += int(value < 0)
+            if minimum_chars > budget.chars:
+                raise _MetadataLimitError("metadata_char_limit")
+        rendered = "" if value is None else str(value)
+        if budget is not None:
+            budget.chars -= len(rendered)
+            if budget.chars < 0:
+                raise _MetadataLimitError("metadata_char_limit")
+        yield path, key, rendered
     else:
         raise TypeError("metadata values must be JSON-like scalars, lists or dictionaries")
 
@@ -1045,48 +957,3 @@ class RAGScanner:
     @staticmethod
     def _hash_content(content: str) -> str:
         return hashlib.sha256(content.encode()).hexdigest()[:12]
-
-
-@dataclass
-class Document:
-    """A document in the RAG pipeline."""
-    text: str
-    metadata: dict[str, Any] | None = None
-    id: str | None = None
-    source: str | None = None
-    embedding: list[float] | None = None
-
-
-@dataclass
-class ScanReport:
-    """Aggregated scan results."""
-    total_documents: int
-    findings: list[Finding]
-    severity_summary: dict[str, int]
-
-    @property
-    def scan_complete(self) -> bool:
-        """False when requested scan work exceeded a resource budget."""
-        return not any(f.finding_type == FindingType.SCAN_INCOMPLETE for f in self.findings)
-
-    @property
-    def is_clean(self) -> bool:
-        return len(self.findings) == 0
-
-    @property
-    def has_blocking_findings(self) -> bool:
-        """True when any finding is critical or high severity."""
-        return any(
-            f.severity in (Severity.CRITICAL, Severity.HIGH) for f in self.findings
-        )
-
-    def summary(self) -> str:
-        lines = [
-            "RAG Security Scan Report",
-            "=" * 40,
-            f"Documents scanned: {self.total_documents}",
-            f"Total findings: {len(self.findings)}",
-        ]
-        for sev, count in sorted(self.severity_summary.items()):
-            lines.append(f"  {sev.upper()}: {count}")
-        return "\n".join(lines)

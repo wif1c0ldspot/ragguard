@@ -138,10 +138,10 @@ class StubGuard:
 
     def ingest(self, text, metadata=None, *, id=None):
         if "BLOCK" in text:
-            return {"decision": "reject", "families": ["fam_block"]}
+            return {"scan_complete": True, "decision": "reject", "families": ["fam_block"]}
         if "FLAG" in text:
-            return {"decision": "review", "families": ["fam_flag"]}
-        return {"decision": "accept", "families": []}
+            return {"scan_complete": True, "decision": "review", "families": ["fam_flag"]}
+        return {"scan_complete": True, "decision": "accept", "families": []}
 
 
 def _entry(id_, label, category, text, split="dev"):
@@ -217,7 +217,7 @@ def test_main_check_fails_with_readable_violations(tmp_path, capsys):
         "min_attack_detection_rate": {"all": 0.9},
         "max_benign_false_block_rate": {"all": 0.1},
         "min_category_detection_rate": {"all": {"cat_y": 0.9, "missing_cat": 0.1}},
-        "max_p95_latency_ms": -1,
+        "max_p95_latency_ms": 0,
     })
     code = run.main(["--quiet", "--check", str(thresholds)], entries=TINY, guard=StubGuard())
     assert code == 1
@@ -250,6 +250,11 @@ def test_unknown_threshold_key_is_a_violation():
     violations = run.check_thresholds({"min_detection": {"all": 0.1}, "_comment": "x"},
                                       {"all": report})
     assert violations == ["unknown threshold key 'min_detection'"]
+
+
+def test_unrepresentable_integer_threshold_is_rejected():
+    report = run.evaluate(TINY, StubGuard())
+    assert run.check_thresholds({"max_p95_latency_ms": 10**1000}, {"all": report})
 
 
 def test_repo_thresholds_file_is_well_formed():
@@ -356,3 +361,44 @@ def test_result_fingerprint_ignores_latency(tmp_path):
         reports.append(json.loads(path.read_text()))
     assert reports[0]["results_sha256"] == reports[1]["results_sha256"]
     assert reports[0]["evaluated_sha256"] == reports[1]["evaluated_sha256"]
+
+
+@pytest.mark.parametrize("thresholds", [
+    {"min_attack_detection_rate": {"holduot": 1}},
+    {"min_attack_detection_rate": {"all": float("nan")}},
+    {"max_benign_false_positive_rate": {"dev": float("inf")}},
+    {"min_attack_detection_rate": {"dev": True}},
+    {"min_attack_detection_rate": {"dev": 1.1}},
+    {"min_category_detection_rate": {"all": {"x": -0.1}}},
+    {"max_p95_latency_ms": -1}, {"max_p95_latency_ms": None},
+    {"min_attack_detection_rate": []}, [],
+])
+def test_invalid_threshold_shapes_fail_closed(thresholds):
+    assert run.check_thresholds(thresholds, {"all": run.evaluate(TINY, StubGuard())})
+
+
+def test_incomplete_and_failed_scans_are_unknown_with_all_case_denominators():
+    from ragguard import RAGPipelineGuard, RAGScanner
+
+    entries = [_entry("attack", "attack", "x", "ordinary prose"),
+               _entry("benign", "benign", "x", "ordinary prose")]
+    for entry in entries:
+        entry["metadata"] = {"a": {"b": "c"}}
+    records = run.run_entries(entries, RAGPipelineGuard(scanner=RAGScanner(max_metadata_nodes=1)))
+    report = run.summarize(records)
+    assert report["coverage"]["unknown"] == 2
+    assert all(report["confusion"][key] == 0 for key in ("tp", "tn", "fp", "fn"))
+    assert report["overall"]["attack_count"] == report["overall"]["benign_count"] == 1
+    assert report["all_case_bounds"]["attack_detection_rate"] == [0, 1]
+    assert report["unknown_ids"] == ["attack", "benign"]
+    assert run.check_thresholds({"min_attack_detection_rate": {"all": 0}}, {"all": report})
+
+    class Failed:
+        def ingest(self, *args, **kwargs):
+            raise RuntimeError("private marker")
+
+    errors = run.run_entries(entries, Failed())
+    assert "private marker" not in json.dumps(errors)
+    failed = run.summarize(errors)
+    assert failed["coverage"]["errors"] == 2
+    assert failed["confusion"]["tp"] == failed["confusion"]["tn"] == 0

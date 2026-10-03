@@ -6,7 +6,10 @@ and distinguishes tested library behavior from proposed framework wiring.
 
 ## Responsibilities and data flow
 
-`scanner.py` owns `Document`, `Finding`, `ScanReport`, normalization and named rules.
+`domain.py` owns shared document, finding and report types. `normalization.py` owns
+canonical and deobfuscated match surfaces. `scanner.py` owns named rules, bounded
+decoding, metadata traversal and chunk scanning; it re-exports the established public
+types and normalization functions for compatibility.
 It holds no findings between calls. Body text is prepared once into match surfaces
 (below); metadata is traversed as JSON-like fields with JSON Pointer locations and
 each leaf is scanned with the injection and metadata families; structural rules
@@ -125,8 +128,9 @@ adding exceptions.
 
 ### Reports and schemas
 
-Reports carry `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.2`) and
-`ruleset_version` (`RULESET_VERSION`, currently `2026.10.3`). Schema 1.2 adds
+Reports carry `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.3`) and
+`ruleset_version` (`RULESET_VERSION`, currently `2026.10.3.1`). Schema 1.3 adds per-document detector audit records, including single-document
+`evaluate()` and `ingest()` results. Schema 1.2 added
 explicit completeness, versioned OWASP risk mappings and batch detector-run
 provenance. The 1.1 advisory-family fields are retained. Two Draft 2020-12 schemas ship
 in `ragguard/schemas/`: `report` (ingest, batch and exported reports) and
@@ -174,7 +178,7 @@ per-pair loop. These budgets are safeguards, not a production performance SLA.
 one response per line on stdout. On startup it writes a single handshake:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3", "schema_version": "1.2", "package_version": "0.4.0a1"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3.1", "schema_version": "1.3", "package_version": "0.4.0a2"}
 ```
 
 `package_version` is the installed distribution version, or `0+unknown` when run
@@ -253,9 +257,10 @@ gaps between these layers instead of replacing their contracts:
 
 The next architectural work should follow measured requirements:
 
-1. **Detection quality:** evaluate a real adapter through the [semantic interface](DETECTORS.md)
-   only with a labelled,
-   representative corpus, latency limits and a defined failure policy. Current
+1. **Detection quality:** expand the measured [semantic evaluation](MODEL_EVALUATION.md)
+   to deployment-matched multilingual and adaptive cases with latency limits and a
+   defined failure policy. The pinned public-corpus classifier run added no held-out
+   recall at its fixed false-positive ceiling. Current
    synthetic document detection remains 35%; these boundary fixes do not improve
    paraphrase or multilingual recall. Keep dev tuning separate from holdout.
 2. **Corpus scale:** introduce incremental or approximate vector assessment when
