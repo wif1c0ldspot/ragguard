@@ -41,7 +41,7 @@ from enum import Enum
 from itertools import islice
 from typing import Any
 
-RULESET_VERSION = "2026.10.2"
+RULESET_VERSION = "2026.10.3"
 
 # --- OWASP Top 10 for LLM Applications (2025) categories used by the scanner ---
 
@@ -70,6 +70,7 @@ class FindingType(str, Enum):
     EMBEDDING_POISONING = "embedding_poisoning"
     CROSS_USER_CONTAMINATION = "cross_user_contamination"
     CANONICAL_INJECTION = "canonical_injection"
+    SCAN_INCOMPLETE = "scan_incomplete"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -111,7 +112,10 @@ class PatternFamily:
 
 # --- Canonicalisation -------------------------------------------------------
 
-_ZERO_WIDTH_RE = re.compile(r"[​-‏‪-‮⁠-⁤﻿]")
+_ZERO_WIDTH_RE = re.compile(
+    r"[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e"
+    r"\u2060-\u206f\ufe00-\ufe0f\ufeff\U000e0100-\U000e01ef]"
+)
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
@@ -239,31 +243,48 @@ def _decode_hex(run: str, budget: int) -> bytes | None:
         return None
 
 
-def _decoded_segments(text: str) -> list[tuple[str, _Surfaces]]:
-    """Bounded, single-level decoding of hex and base64 runs; never raises."""
-    segments: list[tuple[str, _Surfaces]] = []
+@dataclass(frozen=True)
+class _DecodedSegment:
+    label: str
+    surfaces: _Surfaces
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class _DecodeResult:
+    segments: list[_DecodedSegment]
+    incomplete_reasons: tuple[str, ...]
+
+
+def _decoded_segments(text: str) -> _DecodeResult:
+    """Bounded decoding with explicit coverage; resource exceptions propagate."""
+    segments: list[_DecodedSegment] = []
+    reasons: list[str] = []
     budget = _MAX_DECODED_BYTES
     attempts = 0
-    try:
-        for label, regex in ((_HEX_LABEL, _HEX_RUN_RE), (_BASE64_LABEL, _BASE64_RUN_RE)):
-            for match in regex.finditer(text):
-                if (len(segments) >= _MAX_DECODED_SEGMENTS or budget <= 0
-                        or attempts >= _MAX_DECODE_ATTEMPTS):
-                    return segments
-                run = match.group(0)
-                if label == _BASE64_LABEL and _HEX_RUN_RE.fullmatch(run):
-                    continue  # already handled as hex
-                attempts += 1
-                data = (_decode_hex(run, budget) if label == _HEX_LABEL
-                        else _decode_base64(run, budget))
-                decoded = _printable_text(data) if data else None
-                if data is None or decoded is None:
-                    continue
-                budget -= len(data)
-                segments.append((label, _surfaces(decoded)))
-    except (ValueError, TypeError, MemoryError, RecursionError):
-        return segments
-    return segments
+    for label, regex in ((_HEX_LABEL, _HEX_RUN_RE), (_BASE64_LABEL, _BASE64_RUN_RE)):
+        for match in regex.finditer(text):
+            run = match.group(0)
+            if label == _BASE64_LABEL and _HEX_RUN_RE.fullmatch(run):
+                continue  # already handled as hex; do not count twice against coverage
+            reason = ("decoder_segment_limit" if len(segments) >= _MAX_DECODED_SEGMENTS
+                      else "decoder_byte_limit" if budget <= 0
+                      else "decoder_attempt_limit" if attempts >= _MAX_DECODE_ATTEMPTS else None)
+            if reason is not None:
+                return _DecodeResult(segments, tuple(dict.fromkeys([*reasons, reason])))
+            attempts += 1
+            limit = budget * 2 if label == _HEX_LABEL else (budget * 4 // 3) // 4 * 4
+            if len(run) > limit:
+                reasons.append("decoder_byte_limit")
+            data = (_decode_hex(run, budget) if label == _HEX_LABEL
+                    else _decode_base64(run, budget))
+            decoded = _printable_text(data) if data else None
+            if data is None or decoded is None:
+                continue
+            budget -= len(data)
+            segments.append(_DecodedSegment(label, _surfaces(decoded), match.start(), match.end()))
+    return _DecodeResult(segments, tuple(dict.fromkeys(reasons)))
 
 
 # --- Prompt injection families ---------------------------------------------
@@ -340,7 +361,7 @@ INJECTION_FAMILIES: tuple[PatternFamily, ...] = (
     PatternFamily(
         family="delimiter_injection",
         pattern=re.compile(
-            r"<\s*/?\s*(?:script|iframe|object|embed|svg|form|meta|link|base)\b[^>]*>"
+            r"<\s*(?:/\s*)?(?:script|iframe|object|embed|svg|form|meta|link|base)\b(?:[^<>]*>)?"
             r"|\bjavascript\s*:|\bdata\s*:\s*text/html", re.IGNORECASE
         ),
         severity=Severity.HIGH,
@@ -501,7 +522,7 @@ SPLIT_FAMILIES: tuple[PatternFamily, ...] = (
     PatternFamily(
         family="structural_dangerous_tag",
         pattern=re.compile(
-            r"<\s*/?\s*(?:script|iframe|object|embed|svg|form|base)\b[^>]*>"
+            r"<\s*(?:/\s*)?(?:script|iframe|object|embed|svg|form|base)\b(?:[^<>]*>)?"
             rf"|\b{_DOM_EVENT_HANDLERS}\s*=", re.IGNORECASE,
         ),
         severity=Severity.LOW,
@@ -567,8 +588,27 @@ def _redact_metadata_path(path: str) -> str:
     return "/" + "/".join(safe) if safe else ""
 
 
+class _MetadataLimitError(Exception):
+    pass
+
+
+@dataclass
+class _MetadataBudget:
+    nodes: int
+    chars: int
+
+    def consume(self, value: Any, key: str) -> None:
+        self.nodes -= 1
+        if self.nodes < 0:
+            raise _MetadataLimitError("metadata_node_limit")
+        self.chars -= len(key) + (len(value) if isinstance(value, str) else 0)
+        if self.chars < 0:
+            raise _MetadataLimitError("metadata_char_limit")
+
+
 def _metadata_leaves(value: Any, path: str = "", *, key: str = "", depth: int = 0,
-                     ancestors: frozenset[int] = frozenset()) -> Iterator[tuple[str, str, str]]:
+                     ancestors: frozenset[int] = frozenset(),
+                     budget: _MetadataBudget | None = None) -> Iterator[tuple[str, str, str]]:
     """Yield validated JSON-like leaves and escaped JSON Pointer paths.
 
     Reject cycles, unsupported values and excessive nesting without invoking
@@ -576,23 +616,29 @@ def _metadata_leaves(value: Any, path: str = "", *, key: str = "", depth: int = 
     """
     if depth > 64 or id(value) in ancestors:
         raise ValueError("metadata must be acyclic and at most 64 levels deep")
+    if budget is not None:
+        budget.consume(value, key)
     if isinstance(value, dict):
         if key:
             yield path, key, ""
         for child_key, child in value.items():
             if not isinstance(child_key, str):
                 raise TypeError("metadata keys must be strings")
+            if budget is not None and len(child_key) > budget.chars:
+                raise _MetadataLimitError("metadata_char_limit")
             escaped = child_key.replace("~", "~0").replace("/", "~1")
             yield from _metadata_leaves(
                 child, f"{path}/{escaped}", key=child_key, depth=depth + 1,
                 ancestors=ancestors | {id(value)},
+                budget=budget,
             )
     elif isinstance(value, list):
         if key:
             yield path, key, ""
         for index, child in enumerate(value):
             yield from _metadata_leaves(
-                child, f"{path}/{index}", depth=depth + 1, ancestors=ancestors | {id(value)}
+                child, f"{path}/{index}", depth=depth + 1, ancestors=ancestors | {id(value)},
+                budget=budget,
             )
     elif isinstance(value, str):
         yield path, key, value
@@ -620,7 +666,10 @@ def _build_report(total: int, findings: list[Finding]) -> ScanReport:
 class RAGScanner:
     """Stateless heuristic scanner, safe to reuse across concurrent scans.
 
-    ``enabled_families=None`` enables all rules; an empty iterable disables all.
+    ``enabled_families=None`` enables all detection rules; an empty iterable
+    disables detection rules. Operational ``scan_incomplete`` findings cannot
+    be disabled when requested work exceeds a budget. Metadata traversal is
+    bounded by container/leaf visits and the total characters in keys/strings.
     ``max_matches_per_family`` caps findings per family for each scanned text
     (document body or metadata leaf); identical evidence is reported once.
     Legacy embedding/chunk parameters remain readable but do not affect detection.
@@ -637,6 +686,8 @@ class RAGScanner:
         enabled_families: Iterable[str] | None = None,
         redact_evidence: bool = True,
         max_matches_per_family: int = 1,
+        max_metadata_nodes: int = 10_000,
+        max_metadata_chars: int = 1_000_000,
     ):
         legacy = (chunk_size, chunk_overlap, embedding_dim, similarity_threshold)
         if any(value is not None for value in legacy):
@@ -650,7 +701,7 @@ class RAGScanner:
         self.embedding_dim = 1536 if embedding_dim is None else embedding_dim
         self.similarity_threshold = 0.95 if similarity_threshold is None else similarity_threshold
         known = {rule.family for rule in INJECTION_FAMILIES + METADATA_FAMILIES + SPLIT_FAMILIES}
-        known.update(("canonical_override_plus_action", "split_payload"))
+        known.update(("canonical_override_plus_action", "split_payload", "scan_incomplete"))
         selected = known if enabled_families is None else set(enabled_families)
         if selected - known:
             raise ValueError(f"Unknown rule families: {sorted(selected - known)}")
@@ -659,6 +710,8 @@ class RAGScanner:
         self.max_matches_per_family = _positive_int(
             "max_matches_per_family", max_matches_per_family
         )
+        self.max_metadata_nodes = _positive_int("max_metadata_nodes", max_metadata_nodes)
+        self.max_metadata_chars = _positive_int("max_metadata_chars", max_metadata_chars)
 
     def scan_documents(
         self,
@@ -686,9 +739,9 @@ class RAGScanner:
         boundary window (last ``window_chars`` of chunk *i* and first
         ``window_chars`` of chunk *i+1*) is matched both with a separator and
         directly concatenated, covering word and character splits. Windows and
-        chunks use the same bounded decoding as document scans. A family that
-        fires in a window but in neither chunk alone is
-        reported as ``split_payload`` on chunk *i*, with both chunks related.
+        chunks use the same bounded decoding as document scans. Matches crossing
+        a boundary are reported as ``split_payload`` on chunk *i*, with both
+        chunks related, even if another same-family match exists in one chunk.
         """
         window_chars = _positive_int("window_chars", window_chars)
         surfaces = [_surfaces(chunk.text) for chunk in chunks]
@@ -699,43 +752,48 @@ class RAGScanner:
             rules = [r for r in INJECTION_FAMILIES if r.family in self.enabled_families]
             for index in range(len(chunks) - 1):
                 findings.extend(self._scan_boundary(
-                    chunks, index, surfaces[index], surfaces[index + 1], rules, window_chars,
+                    chunks, index, rules, window_chars,
                 ))
         return _build_report(len(chunks), findings)
 
     def _scan_boundary(
-        self, chunks: list[Document], index: int, left: _Surfaces, right: _Surfaces,
+        self, chunks: list[Document], index: int,
         rules: list[PatternFamily], window_chars: int,
     ) -> list[Finding]:
         tail, head = chunks[index].text[-window_chars:], chunks[index + 1].text[:window_chars]
-        # Match on the newline-joined window; locate evidence on a space-joined copy
-        # so phrases spanning the boundary keep their original casing.
-        window = replace(_surfaces(tail + "\n" + head), raw=tail + " " + head)
-        joined = tail + head
-        sources = [("", window), ("", _surfaces(joined))]
-        sources.extend(_decoded_segments(tail + "\n" + head))
-        sources.extend(_decoded_segments(joined))
-        sides = [("", left), ("", right)]
-        sides.extend(_decoded_segments(left.raw))
-        sides.extend(_decoded_segments(right.raw))
-
-        def first_hit(
-            rule: PatternFamily, candidates: list[tuple[str, _Surfaces]],
-        ) -> tuple[str, str] | None:
-            for source_label, source in candidates:
-                hit = next(self._iter_evidence(rule, source), None)
-                if hit is not None:
-                    label, body = hit
-                    return source_label + label, body
-            return None
-
+        left, right = _surfaces(tail), _surfaces(head)
+        windows = [_surfaces(tail + "\n" + head), _surfaces(tail + head)]
+        decoded = [_decoded_segments(window.raw) for window in windows] if rules else []
         findings: list[Finding] = []
         ids = (resolve_document_id(chunks[index]), resolve_document_id(chunks[index + 1]))
+        reasons = dict.fromkeys(
+            reason for result in decoded for reason in result.incomplete_reasons
+        )
+        findings.extend(replace(
+            self._incomplete_finding(ids[0], index, reason),
+            related_document_ids=ids, related_document_indices=(index, index + 1),
+        ) for reason in reasons)
         for rule in rules:
-            hit = first_hit(rule, sources)
+            hit = None
+            for window in windows:
+                hit = self._crossing_evidence(rule, window, left, right)
+                if hit is not None:
+                    break
             if hit is None:
-                continue
-            if first_hit(rule, sides) is not None:
+                for result in decoded:
+                    for segment in result.segments:
+                        # Only an encoded token spanning the physical seam can
+                        # attribute decoded evidence to both participants.
+                        if not segment.start < len(tail) < segment.end:
+                            continue
+                        candidate = next(self._iter_evidence(rule, segment.surfaces), None)
+                        if candidate is not None:
+                            label, body = candidate
+                            hit = segment.label + label, body
+                            break
+                    if hit is not None:
+                        break
+            if hit is None:
                 continue
             label, body = hit
             findings.append(Finding(
@@ -744,7 +802,7 @@ class RAGScanner:
                 document_id=ids[0],
                 description=(
                     f"Injection pattern ({rule.family}) spans the boundary between chunks "
-                    f"{index} and {index + 1}; neither chunk matches on its own"
+                    f"{index} and {index + 1}"
                 ),
                 evidence=self._finalize_evidence(rule, label, body.replace("\n", " ")),
                 remediation=_SPLIT_PAYLOAD_REMEDIATION,
@@ -755,6 +813,44 @@ class RAGScanner:
                 related_document_indices=(index, index + 1),
             ))
         return findings
+
+    def _crossing_evidence(
+        self, rule: PatternFamily, window: _Surfaces, left: _Surfaces, right: _Surfaces,
+    ) -> tuple[str, str] | None:
+        if rule.surface == "raw":
+            candidates = [("", window.raw, left.raw, right.raw)]
+        else:
+            candidates = [("", window.canonical, left.canonical, right.canonical)]
+            if window.deobfuscated is not None:
+                candidates.append((
+                    _DEOBFUSCATED_LABEL, window.deobfuscated,
+                    left.deobfuscated or left.canonical, right.deobfuscated or right.canonical,
+                ))
+        for label, text, before, after in candidates:
+            # Normalization may merge characters across the seam (entities,
+            # combining marks, spaced letters). The unchanged prefix/suffix
+            # delimit the seam's transformed interval instead of guessing an
+            # offset in the normalized string.
+            prefix = 0
+            for a, b in zip(text, before, strict=False):
+                if a != b:
+                    break
+                prefix += 1
+            suffix = 0
+            for a, b in zip(reversed(text), reversed(after), strict=False):
+                if a != b:
+                    break
+                suffix += 1
+            low, high = sorted((prefix, len(text) - suffix))
+            for match in rule.pattern.finditer(text):
+                crosses = (match.start() < low < match.end() if low == high
+                           else match.start() < high and match.end() > low)
+                if crosses:
+                    body = (match.group(0) if label else self._evidence(
+                        window.raw.replace("\n", " "), match.group(0),
+                    ))
+                    return label, body
+        return None
 
     def _scan_document(
         self, doc: Document, index: int, surfaces: _Surfaces, *,
@@ -802,39 +898,46 @@ class RAGScanner:
             raise TypeError("Document.metadata must be a dictionary or None")
         findings: list[Finding] = []
         rules = INJECTION_FAMILIES + METADATA_FAMILIES
-        for path, key, value in _metadata_leaves(doc.metadata):
-            # Preserve field structure rather than scanning Python repr(dict).
-            candidate = f"{key}: {value}" if key else value
-            matches = self._scan_rules(
-                candidate, rules, FindingType.METADATA_INJECTION, doc_id, index, path,
-                decode=True,
-            )
-            sensitive = any(
-                _CREDENTIAL_KEY_RE.fullmatch(
-                    canonicalize(part.replace("~1", "/").replace("~0", "~"))
-                ) for part in path.split("/")[1:]
-            )
-            if sensitive and value and "metadata_credential_leak" in self.enabled_families:
-                if not any(f.family == "metadata_credential_leak" for f in matches):
-                    rule = METADATA_FAMILIES[-1]
-                    matches.append(Finding(
-                        finding_type=FindingType.METADATA_INJECTION, severity=rule.severity,
-                        document_id=doc_id, description="Credential-bearing metadata field",
-                        evidence=value[:120], remediation=rule.remediation,
-                        owasp_mapping=rule.owasp, family=rule.family,
-                        document_index=index, metadata_path=path,
-                    ))
-            if self.redact_evidence:
-                redacted_path = _redact_metadata_path(path)
-                matches = [
-                    replace(
-                        finding, metadata_path=redacted_path,
-                        evidence=("[REDACTED credential-bearing metadata]" if sensitive
-                                  else finding.evidence),
-                    )
-                    for finding in matches
-                ]
-            findings.extend(matches)
+        try:
+            for path, key, value in _metadata_leaves(
+                doc.metadata,
+                budget=_MetadataBudget(self.max_metadata_nodes, self.max_metadata_chars),
+            ):
+                # Preserve field structure rather than scanning Python repr(dict).
+                candidate = f"{key}: {value}" if key else value
+                matches = self._scan_rules(
+                    candidate, rules, FindingType.METADATA_INJECTION, doc_id, index, path,
+                    decode=True,
+                )
+                sensitive = any(
+                    _CREDENTIAL_KEY_RE.fullmatch(
+                        canonicalize(part.replace("~1", "/").replace("~0", "~"))
+                    ) for part in path.split("/")[1:]
+                )
+                if sensitive and value and "metadata_credential_leak" in self.enabled_families:
+                    if not any(f.family == "metadata_credential_leak" for f in matches):
+                        rule = METADATA_FAMILIES[-1]
+                        matches.append(Finding(
+                            finding_type=FindingType.METADATA_INJECTION, severity=rule.severity,
+                            document_id=doc_id, description="Credential-bearing metadata field",
+                            evidence=value[:120], remediation=rule.remediation,
+                            owasp_mapping=rule.owasp, family=rule.family,
+                            document_index=index, metadata_path=path,
+                        ))
+                if self.redact_evidence:
+                    redacted_path = _redact_metadata_path(path)
+                    matches = [
+                        replace(
+                            finding, metadata_path=redacted_path,
+                            evidence=("[REDACTED credential-bearing metadata]" if sensitive
+                                      and finding.finding_type != FindingType.SCAN_INCOMPLETE
+                                      else finding.evidence),
+                        )
+                        for finding in matches
+                    ]
+                findings.extend(matches)
+        except _MetadataLimitError as exc:
+            findings.append(self._incomplete_finding(doc_id, index, str(exc)))
         return findings
 
     def _scan_rules(
@@ -851,15 +954,21 @@ class RAGScanner:
         if surfaces is None:
             surfaces = _surfaces(text)
         findings: list[Finding] = []
-        segments: list[tuple[str, _Surfaces]] | None = None
+        segments: list[tuple[str, _Surfaces]] = []
+        if decode and not raw and any(
+            rule.family in self.enabled_families and rule.family in _INJECTION_FAMILY_NAMES
+            for rule in rules
+        ):
+            decoded = _decoded_segments(text)
+            segments = [(segment.label, segment.surfaces) for segment in decoded.segments]
+            findings.extend(self._incomplete_finding(doc_id, index, reason, path)
+                            for reason in decoded.incomplete_reasons)
         for rule in rules:
             if rule.family not in self.enabled_families:
                 continue
             evidences: list[str] = []
             sources: list[tuple[str, _Surfaces]] = [("", surfaces)]
             if decode and not raw and rule.family in _INJECTION_FAMILY_NAMES:
-                if segments is None:
-                    segments = _decoded_segments(text)
                 sources.extend(segments)
             for source_label, source in sources:
                 for label, body in self._iter_evidence(rule, source, raw=raw):
@@ -883,6 +992,18 @@ class RAGScanner:
                 for evidence in evidences
             )
         return findings
+
+    @staticmethod
+    def _incomplete_finding(
+        doc_id: str, index: int, reason: str, path: str | None = None,
+    ) -> Finding:
+        return Finding(
+            finding_type=FindingType.SCAN_INCOMPLETE, severity=Severity.HIGH,
+            document_id=doc_id, document_index=index, metadata_path=path,
+            description=f"Scan incomplete: {reason}", evidence=reason,
+            remediation="Hold this content and retry within explicitly configured scan budgets.",
+            family="scan_incomplete", confidence="coverage-limit",
+        )
 
     def _iter_evidence(
         self, rule: PatternFamily, surfaces: _Surfaces, *, raw: bool = False,
@@ -942,6 +1063,11 @@ class ScanReport:
     total_documents: int
     findings: list[Finding]
     severity_summary: dict[str, int]
+
+    @property
+    def scan_complete(self) -> bool:
+        """False when requested scan work exceeded a resource budget."""
+        return not any(f.finding_type == FindingType.SCAN_INCOMPLETE for f in self.findings)
 
     @property
     def is_clean(self) -> bool:

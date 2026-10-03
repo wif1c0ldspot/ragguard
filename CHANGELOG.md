@@ -5,6 +5,38 @@ All notable changes to ragguard. Format: keep-a-changelog; versions follow the p
 
 ## [Unreleased]
 
+## [0.4.0a1] — 2026-10-03
+
+Ruleset `2026.10.3`; report schema `1.2`.
+
+### Fixed
+
+- Incomplete decoding and metadata traversal produce explicit completeness
+  findings; enforcing boundaries never release partial scans, including in
+  monitoring mode. Resource errors propagate instead of returning partial work.
+- Malformed markup scanning avoids quadratic suffix rescanning. Chunk findings
+  use crossing spans rather than suppressing a family globally. Unicode format
+  character variants receive canonical scanning.
+
+### Added
+
+- Versioned OWASP 2025/2026 mappings; model/configuration provenance in batch JSON.
+- Pinned external dataset imports, separate base/enhanced attack evaluation,
+  confusion counts and confidence intervals, and calibration/evaluation separation.
+- Optional offline Prompt Guard 2 and ungated ProtectAI adapters with explicit
+  model/revision-bound calibration and token limits; killable detector deadlines.
+  Weights are not bundled. Actual ProtectAI scoring of all 2,447 external inputs
+  added no held-out recall at the preselected 5% dev false-positive ceiling;
+  semantic detection remains disabled by default. Raw scores and provenance ship.
+- Runnable real-model evaluation with explicit unknown/error denominators and
+  separate rule/model/combined metrics; pinned optional runtime requirements.
+- Memory/tool-description/final-context boundaries, exact content digests, and
+  executable memory and deterministic action-control examples.
+- Paired local Qwen generation smoke probe with frozen scenarios and judge,
+  all synthetic outputs, explicit blocking utility costs and negative results.
+- See `docs/IMPROVEMENT_VERIFICATION.md` for verified contracts and remaining
+  model-backed experiments; this is not a claim of complete OWASP coverage.
+
 ## [0.3.0] — 2026-10-03
 
 ### Added
