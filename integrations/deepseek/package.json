@@ -38,9 +38,9 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
-    "@types/node": "24.10.0",
-    "tsx": "4.20.6",
-    "typescript": "5.9.3",
+    "@types/node": "26.6.3",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
     "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
     "@deepseek-ai/dsh-llm": "0.1.7-rc.2"
   }
