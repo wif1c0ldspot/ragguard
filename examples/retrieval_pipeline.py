@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from ragguard import RULESET_VERSION, ContentBoundary, Document
+from ragguard import RULESET_VERSION, Boundary, ContentBoundary, Document
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,9 @@ def prepare_context(
         # The final rendered projection is the only value eligible for release.
         # Checking individual chunks alone misses instructions split across them.
         context = "\n\n".join(render(document) for document in retrieved)
-        result = gate.check(Document(text=context, id="assembled-context"))
+        result = gate.check(
+            Document(text=context, id="assembled-context"), boundary=Boundary.FINAL_CONTEXT,
+        )
         audit.update(decision=result.decision, families=result.families)
         if result.decision != "accept" or result.released_text is None:
             return PreparedContext(None, audit)

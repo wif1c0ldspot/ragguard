@@ -2,19 +2,20 @@
 
 The project is alpha. Python 3.10, 3.11 and 3.12 are tested; the DeepSeek bundle
 targets Node 22 and the exact harness peer versions in its package manifest.
-Semantic detector adapters are application-owned and require separate evaluation.
+Optional semantic models require separately provisioned weights, explicit calibration
+and domain-specific evaluation. No weights are included in release assets.
 
 ## Install a versioned snapshot
 
-Download the wheel, npm tarball, `build-info.json` and `SHA256SUMS` from the
+Download the wheel, source distribution, npm tarball, `build-info.json` and `SHA256SUMS` from the
 [GitHub releases page](https://github.com/wif1c0ldspot/ragguard/releases).
 Download all listed files into one directory, then verify:
 
 ```bash
 sha256sum -c SHA256SUMS       # macOS: shasum -a 256 -c SHA256SUMS
-python -m pip install ./ragguard-0.3.0-py3-none-any.whl
+python -m pip install ./ragguard-0.4.0a1-py3-none-any.whl
 # Optional vector checks:
-python -m pip install './ragguard-0.3.0-py3-none-any.whl[vector]'
+python -m pip install './ragguard-0.4.0a1-py3-none-any.whl[vector]'
 ```
 
 The Python base package has no runtime dependencies. The optional vector extra
@@ -33,7 +34,7 @@ downloaded from the same release is not an independent signature.
 4. From the clean committed checkout, run:
 
    ```bash
-   uv run --no-project --python 3.12 python scripts/build_release.py --tag v0.3.0
+   uv run --no-project --python 3.12 python scripts/build_release.py --tag v0.4.0a1
    ```
 
    This exports the committed tree into two fresh directories, excluding ignored

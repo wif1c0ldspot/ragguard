@@ -262,3 +262,212 @@ The source/license fields are importer declarations; the tool does not certify
 rights, authenticity, or independent authorship. Review those facts and remove real
 secrets before importing. Keep sensitive corpora and generated reports outside the
 repository unless publication is separately authorized.
+
+## Reproducible external measurements
+
+`external.py` imports original MIT-licensed NotInject and InjecAgent JSON from
+exact upstream commits and checks SHA-256 plus byte length for **every** downloaded
+file, including licenses and upstream READMEs. `external-sources.json` pins both
+original files and converted-corpus hashes. Conversion preserves `prompt`
+(NotInject) and `Tool Response` (InjecAgent) verbatim; it does not execute tools,
+contact addresses in examples, or run an agent. External data stays in the cache,
+outside the repository. The checked-in reports contain aggregate metrics and IDs,
+not upstream sample text.
+
+```bash
+python evals/external.py import --cache-dir /tmp/ragguard-external
+python evals/external.py evaluate --cache-dir /tmp/ragguard-external
+python evals/external.py calibrate --cache-dir /tmp/ragguard-external --max-fpr .05
+# Re-import from verified cached raw sources without any network access:
+python evals/external.py import --cache-dir /tmp/ragguard-external --offline
+```
+
+The importer is explicit; evaluation/calibration never download data. An altered
+cached file fails verification instead of being silently replaced. Source updates
+or conversion changes require a separately reviewed source-lock update. Preserve
+upstream notices when redistributing cached data. Primary sources and licenses:
+[NotInject / InjecGuard](https://github.com/InjecGuard/InjecGuard),
+[NotInject dataset card](https://huggingface.co/datasets/leolee99/NotInject), and
+[InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent). Immutable license URLs,
+revisions, original-file hashes, and derived hashes are recorded in the source lock.
+These sources remain **external benchmark fixtures**, not production traffic or
+proof that an evaluated model never encountered their content during training.
+
+### Splitting and calibration
+
+All records derived from an original source case or attack-tool family must remain
+on one side of dev/holdout. InjecAgent base and enhanced variants share the same
+origin and family assignments: 62 attack-tool families, 697 dev cases and 357
+holdout cases per variant. Shared user-tool wrappers still create correlation and
+are not claimed to be unseen contexts.
+
+NotInject prompts are grouped transitively by any shared trigger word. This strict
+word-family safeguard produces only **two connected components**, with 246 dev
+examples and 93 holdout examples. The larger group was assigned to dev before
+examining detector outcomes. This creates a language/domain shift and very few
+independent groups; its counts cannot support strong population guarantees.
+Source/group validation rejects cross-split derivatives. A source-disjoint test
+would be stronger, but these sources are class-confounded (NotInject is all benign;
+InjecAgent all malicious), so this release does not claim one.
+
+Calibration enumerates existing severity review floors from info through critical.
+It chooses the highest dev recall that satisfies the supplied **empirical** dev FPR
+ceiling, breaking ties by lower dev FPR and then stricter severity. The holdout is
+scanned only after selecting that floor. An infeasible ceiling is reported as
+`no_feasible_policy`; holdout violations are reported without choosing a new floor.
+This changes an evaluation policy only, never the package's default or scanner rules.
+It is not continuous-score ROC optimization or a certified deployment FPR bound.
+
+Reports include TP/FP/TN/FN, two-sided 95% Wilson intervals, source/corpus hashes,
+runtime and implementation-file hashes, and calibration candidates. Wilson intervals
+assume independent Bernoulli observations; repeated templates and families make
+these **descriptive row-level intervals**, potentially too narrow. Benign-only
+attack recall and attack-only FPR are `null`, not fabricated zeros. Any pooled
+precision depends on the artificial source/class mix.
+
+### Observed results, ruleset 2026.10.3
+
+The saved `reports/external-baseline.json` records:
+
+- NotInject: 0 of 339 benign samples flagged; observed FPR 0%, with a descriptive
+  Wilson interval of 0–1.12%. This does not establish zero deployment false positives.
+- InjecAgent **base**: 68 of 1,054 attacks detected (6.45%; descriptive interval
+  5.12–8.10%). On its holdout, 34 of 357 are detected (9.52%).
+- InjecAgent **enhanced**: 1,054 of 1,054 detected. The shared canonical override
+  enhancement drives this result; it does not establish independent semantic
+  detection of every attack family.
+
+At a 5% empirical dev FPR ceiling, `reports/external-calibration.json` selects a
+low review floor for base. On the **same holdout**, recall becomes 53/357 (14.85%)
+while NotInject holdout flags remain 0/93. The additional 19 are existing structural
+SQL advisory findings promoted to **review**; blocking remains 34/357. This is a
+policy sensitivity result, not newly learned detection. Enhanced selects critical
+and still detects every holdout case. Report base and enhanced separately.
+
+`reports/synthetic-documents.json` and `reports/synthetic-chunks.json` record the
+unchanged frozen-corpus gates. No rules were tuned against these external holdouts.
+
+## Exposed transformation stress tests
+
+```bash
+python evals/transformations.py
+python evals/transformations.py --corpus-output /tmp/ragguard-transformations.jsonl
+```
+
+This generates 48 cases from eight **dev-only** synthetic seeds and six deterministic
+representations: identity, uppercase, HTML entities, zero-width separators, base64,
+and additional spaces. Labels describe the inherited intended injection; they are
+not proof a downstream model would follow encoded content. The corpus and report
+are explicitly marked exposed, non-adaptive, and without an independent holdout.
+Ruleset 2026.10.3 detects 9/24 attacks and flags 4/24 benign transformations.
+These difficult results are preserved rather than hidden behind a success-only gate.
+
+## End-to-end outcomes: available protocol, not measured results
+
+Document detection cannot determine whether a malicious action occurred or whether
+a legitimate task still completed. **No full AgentDojo agent benchmark run
+was performed for this release.** `outcomes.py` is a runnable importer/comparator
+for artifacts generated by a real harness; it does not execute agents or judge traces.
+
+For a valid run, pin an AgentDojo commit, task suite, model snapshot, attack strategy,
+seed, and evaluator. Run paired baseline and ragguard-protected agents on the same
+clean and attacked case sets. Preserve the original benchmark's security and utility
+judgments, raw traces, failed executions, tool configuration, and defense settings.
+Classifying a saved tool-output string is not an acceptable substitute.
+
+Each exported artifact must have `schema_version: 1`, `benchmark`,
+`benchmark_revision`, `model`, `model_revision`, `seed`, `judging_method`, `defense`,
+and a nonempty `records` list. Each record needs `case_id`, `condition`
+(`clean` or `attacked`), `status` (`ok` or `error`), boolean `task_success` for valid
+runs, and boolean `attack_success` for valid attacked runs. Clean `attack_success`
+and both success fields for error runs must be null. Baseline/defended provenance
+and case/condition sets must match exactly; mismatches fail closed.
+
+```bash
+python evals/outcomes.py --baseline baseline.json --defended defended.json \
+  --output agent-outcomes.json
+```
+
+The output reports attack success **and** legitimate-task completion, valid and
+all-case denominators, explicit error counts, and paired utility losses/gains.
+All-case successes with missing outcomes are labeled lower bounds; errors are not
+silently counted as prevented attacks. Imported judgments remain producer claims,
+not independently verified outcomes. See the
+[AgentDojo benchmark](https://github.com/ethz-spylab/agentdojo) for the actual
+execution environment and evaluators.
+
+## Real local semantic classifier evaluation
+
+`semantic.py` runs the provisioned, ungated Apache-2.0 checkpoint
+`protectai/deberta-v3-base-prompt-injection-v2` at immutable revision
+`90c9989b1a342275dd0d1a95aad283c04e075671` through the local scoring adapter.
+It requires a separate model runtime; the base package remains standard-library only.
+`requirements-semantic.txt` records the exact dependency versions used. See
+[`docs/MODEL_EVALUATION.md`](../docs/MODEL_EVALUATION.md) for model provenance and setup.
+
+After provisioning the pinned checkpoint and importing external corpora:
+
+```bash
+PYTHONPATH="$PWD" /tmp/ragguard-model-runtime/bin/python evals/semantic.py \
+  --cache-dir /tmp/ragguard-external \
+  --model-cache /tmp/ragguard-model-cache/hub \
+  --limit-per-split 0 --threads 2 \
+  --output evals/reports/semantic-protectai.json
+```
+
+`--model-cache` is the Hugging Face **hub cache directory**, not its parent
+`HF_HOME`. The scorer loads local safetensors only, disables network access and
+remote model code, runs on CPU, and passes each complete text without truncation.
+Inputs exceeding its 512-token or character budgets remain unscored errors. They
+are never counted as safe content or as successfully detected attacks. Rule-scan
+incompleteness is also unknown; its operational withholding decision earns no
+classifier detection credit. Combined metrics require both scans to complete.
+
+A bounded trial defaults to 32 rows **per dataset and split**, selected by a hash
+of seed, source, and origin identity before inspecting scores. InjecAgent base and
+enhanced variants retain matching selected origins. `--limit-per-split 0` evaluates
+all 2,447 rows (339 NotInject plus 1,054 cases in each InjecAgent variant).
+The report states selected versus available counts and corpus hashes explicitly.
+
+The sequence is dev scoring, threshold selection, then holdout scoring. For each
+InjecAgent variant separately, calibration maximizes dev recall under the configured
+FPR ceiling (default 5%), breaking ties with the larger threshold. Benign dev errors
+consume the FPR budget conservatively; attack errors never earn recall. A threshold
+may legitimately produce zero recall, or calibration may be infeasible. Neither
+case triggers holdout tuning or relaxed requirements.
+
+The report compares default **rules**, **model**, and **rules OR model** flags on
+holdout, including rules on the identical model-scored subset. Model/combined
+positives represent review flags, not measured downstream blocks. Combined FPR is
+checked separately because adding rules can violate the model's calibrated ceiling.
+Every comparison includes evaluated/unknown denominators, per-label errors,
+full-denominator worst-case bounds, and descriptive Wilson intervals on scored
+observations. Raw records retain scores, token counts, input hashes, latency,
+rule completeness, and sanitized error classes—never input text or exception messages.
+
+Reproduction metadata includes checkpoint file hashes, library versions, runtime,
+threads, configuration, source locks, evaluation code hashes, and calibration-record
+hashes. Latency includes cold loading on the first scored example and is a local
+observation. Public-dataset exposure during **model training is unknown**: our
+family-separated dev/holdout calibration does not make these datasets independent
+of pretraining. The checkpoint is described as English, its upstream implementation
+repository is archived, and classifier performance does not establish multilingual
+coverage, end-to-end agent security, or legitimate-task utility.
+
+
+Measured full-corpus result (`reports/semantic-protectai.json`, ruleset 2026.10.3):
+all **2,447 rows** were scored, with **zero model errors and zero incomplete rule
+scans**; summed model latency was 150.46 seconds on this CPU runtime. The fixed 5%
+dev FPR requirement selected a base threshold of 1.0 (zero dev recall). On the base
+holdout, model-only detects **0/357** attacks; rules and combined each detect
+**34/357 (9.52%)**. For enhanced, the selected threshold is approximately
+0.999999404: model-only detects **88/357 (24.65%)**, while rules and combined each
+detect **357/357**. Every policy flags **0/93** heldout NotInject examples.
+
+Thus this real checkpoint adds **no measured heldout recall at the chosen FPR
+ceiling**. The run demonstrates an operational, reproducible optional detector
+path, not a validated accuracy improvement. The high calibrated threshold and
+poor base recall are retained in the report; no ceiling was relaxed and no
+holdout-driven threshold replacement was performed. The enhanced canonical
+wrapper, class/source confounding, and unknown model-training overlap remain
+material limitations of these comparisons.
