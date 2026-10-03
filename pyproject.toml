@@ -1,6 +1,6 @@
 [project]
 name = "ragguard"
-version = "0.3.0"
+version = "0.4.0a1"
 description = "Security scanner for Retrieval-Augmented Generation pipelines — detects prompt injection, metadata poisoning, chunk-splitting exploits, and vector store contamination"
 readme = "README.md"
 requires-python = ">=3.10"

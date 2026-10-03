@@ -1,6 +1,6 @@
 """Deterministic contract tests; these do not measure model accuracy."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, asdict
 
 import pytest
 
@@ -46,7 +46,7 @@ def test_semantic_findings_use_policy_and_report_schema():
     import jsonschema
 
     jsonschema.validate(batch.to_dict(), load_schema("report"))
-    assert "detector_runs" not in batch.to_dict()
+    assert batch.to_dict()["detector_runs"] == [asdict(run)]
 
 
 def test_regex_always_runs_even_when_semantic_detector_is_clean():
@@ -182,3 +182,31 @@ def test_detector_input_has_no_dependency_on_provider_sdk():
 def test_guard_rejects_invalid_detector_configuration(kwargs):
     with pytest.raises(ValueError):
         RAGPipelineGuard(**kwargs)
+
+
+def test_detector_provenance_survives_policy_and_schema_serialization():
+    from ragguard.detectors import DetectorProvenance
+
+    provenance = DetectorProvenance("test-adapter", "test-model", "a" * 40,
+                                    "b" * 64, "c" * 64)
+    detector = StubDetector(DetectorResult(provenance=provenance))
+    batch = RAGPipelineGuard(detector=detector).evaluate_batch([Document("Reference")])
+    assert batch.detector_runs[0].provenance == provenance
+    assert batch.to_dict()["detector_runs"][0]["provenance"] == asdict(provenance)
+    import jsonschema
+
+    jsonschema.validate(batch.to_dict(), load_schema("report"))
+
+
+@pytest.mark.parametrize("field", ["config_sha256", "calibration_sha256"])
+def test_provenance_requires_actual_sha256_fields(field):
+    from dataclasses import replace
+
+    from ragguard.detectors import DetectorProvenance
+
+    valid = DetectorProvenance("test", "model", "a" * 40, "b" * 64, "c" * 64)
+    invalid = replace(valid, **{field: "not-a-hash"})
+    with pytest.raises(DetectorError):
+        RAGPipelineGuard(detector=StubDetector(DetectorResult(provenance=invalid))).evaluate(
+            Document("Reference"),
+        )

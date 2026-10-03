@@ -1,6 +1,7 @@
 # Contributing
 
-Ragguard is an alpha, local heuristic scanner. Contributions should preserve its
+Ragguard is an alpha security scanner with default local heuristics and optional
+pinned local classifiers. Contributions should preserve its
 explainable findings and explicit separation between detection, policy and host
 application enforcement. Read the [architecture](docs/ARCHITECTURE.md) and
 [threat model](docs/THREAT_MODEL.md) before changing security-sensitive behavior.
@@ -46,3 +47,17 @@ Never add real credentials, private documents or customer data to tests, reports
 issues or evaluation fixtures. Use synthetic examples. Report possible exploitable
 bypasses and other vulnerabilities through [the private security process](SECURITY.md),
 not a public issue. This project does not promise response or release timelines.
+
+
+## Model and evaluation contributions
+
+Keep model dependencies and weights out of the base package and ordinary CI.
+Pin model revisions and runtime versions, preserve upstream license attribution,
+and use safetensors without custom remote code. Do not accept gated terms or send
+private evaluation data to services on behalf of contributors.
+
+Select thresholds on development data only. Report scored, withheld and failed
+cases separately; an input-budget failure is not successful attack detection.
+Keep base/enhanced variants separate, disclose training-overlap uncertainty, and
+compare policies on identical denominators. Model-backed RAG smoke probes are
+not substitutes for deployment-specific or adaptive agent evaluations.

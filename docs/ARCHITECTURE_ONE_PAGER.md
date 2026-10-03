@@ -34,7 +34,7 @@ critical/high. `ContentBoundary` releases text only after policy allows it,
 holding review by default. `evaluate_chunks()` applies that policy to both participants
 in a boundary finding. Errors and oversized inputs never release text.
 
-**Contracts:** reports carry `schema_version` 1.1 and `ruleset_version`; JSON
+**Contracts:** reports carry `schema_version` 1.2 and `ruleset_version`; JSON
 Schemas for reports and the worker protocol ship with the package
 (`load_schema`). The worker's ready handshake announces ruleset, schema and
 package versions, and clients fail closed on drift.
@@ -55,13 +55,15 @@ a result cannot undo a tool's side effects. The host owns ACLs, credentials,
 approvals, sandboxing, egress and output validation.
 
 **Measured, not assumed:** `evals/` runs a synthetic corpus in CI. Ruleset
-2026.10.2 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
+2026.10.3 flags 35% of attacks at a 5.1% benign false-positive rate; paraphrased,
 multilingual and task-phrased exfiltration attacks are at 0%. Calibrate per-family
 policy on your own corpus before enabling automatic rejection.
 
-**Design tradeoff:** small deterministic rules are cheap (sub-millisecond p95) and
+**Design tradeoff:** small deterministic rules were cheap on the local synthetic
+benchmark (sub-millisecond p95; not a deployment SLO) and
 auditable, but miss novel phrasing and can flag benign technical material. A
-provider-neutral semantic adapter interface is available; a validated model tier
+provider-neutral semantic adapters and pinned research-model measurements are
+available; a deployment-validated model tier
 and a data-driven rule pack remain future work. See [detector contracts](DETECTORS.md).
 
 See [integration recipes](HARNESS_INTEGRATIONS.md), the

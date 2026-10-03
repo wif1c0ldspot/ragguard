@@ -18,10 +18,17 @@ from ragguard.detectors import (
     DetectorConfig,
     DetectorError,
     DetectorInput,
+    DetectorProvenance,
     DetectorResult,
     DetectorRun,
     SemanticDetection,
     SemanticDetector,
+)
+from ragguard.local_detector import (
+    LocalDetectorConfig,
+    LocalPromptInjectionDetector,
+    ScoreCalibration,
+    calibrate_threshold,
 )
 from ragguard.pipeline import (
     REPORT_SCHEMA_VERSION,
@@ -32,6 +39,7 @@ from ragguard.pipeline import (
     RAGPipelineGuard,
     load_schema,
 )
+from ragguard.process_detector import ProcessDetector
 from ragguard.scanner import (
     RULESET_VERSION,
     Document,
@@ -47,7 +55,7 @@ from ragguard.scanner import (
 if TYPE_CHECKING:
     from ragguard.vector_check import VectorAssessment, VectorStoreIntegrityChecker
 
-__version__ = "0.3.0"
+__version__ = "0.4.0a1"
 
 # The vector checker needs numpy, which ships in the optional ``vector`` extra.
 # Import it lazily so text scanning and the worker stay standard-library only.
@@ -79,6 +87,7 @@ __all__ = [
     "DetectorConfig",
     "DetectorError",
     "DetectorInput",
+    "DetectorProvenance",
     "DetectorResult",
     "DetectorRun",
     "SemanticDetection",
@@ -88,13 +97,18 @@ __all__ = [
     "FindingType",
     "IngestionDecision",
     "IngestionPolicy",
+    "LocalDetectorConfig",
+    "LocalPromptInjectionDetector",
+    "ProcessDetector",
     "RAGPipelineGuard",
     "RAGScanner",
     "ScanReport",
     "Severity",
+    "ScoreCalibration",
     "VectorAssessment",
     "VectorStoreIntegrityChecker",
     "canonicalize",
+    "calibrate_threshold",
     "load_schema",
     "resolve_document_id",
     "__version__",
