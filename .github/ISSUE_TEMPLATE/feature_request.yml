@@ -1,0 +1,18 @@
+name: Feature request
+description: Propose a supported use case or improvement.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and intended use
+      description: Describe the integration boundary or workflow that needs improvement.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+      description: Include constraints and how the result could be verified.
+    validations:
+      required: true

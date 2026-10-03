@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/wif1c0ldspot/ragguard/security/advisories/new
+    about: Use private reporting for exploitable bypasses or sensitive-data exposure; do not disclose them in public issues.

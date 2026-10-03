@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible non-security defect using synthetic data.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, use [private security reporting](https://github.com/wif1c0ldspot/ragguard/security/advisories/new). Do not include credentials, private documents or undisclosed exploits here.
+  - type: input
+    id: version
+    attributes:
+      label: Version and environment
+      description: Commit/package version, Python version, and Node version if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal synthetic reproduction
+      description: Include configuration and commands; remove private source material.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Include relevant sanitized output and whether enforcement withheld content.
+    validations:
+      required: true
