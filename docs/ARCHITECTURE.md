@@ -142,8 +142,8 @@ maximum of word-set Jaccard and character 3-gram Jaccard over the first 20,000
 characters of each text. Legitimate paraphrases and translations can trigger it;
 it suggests review, not tampering attribution.
 
-`assess_embedding_fidelity(documents, embed_fn)` is the reliable tampering
-signal. It re-embeds each stored text in batches through a caller-supplied
+`assess_embedding_fidelity(documents, embed_fn)` reports vector/text
+inconsistency. It does not establish malicious intent or factual truth. It re-embeds each stored text in batches through a caller-supplied
 `embed_fn` and reports `embedding_text_mismatch` (high) when the cosine between
 the stored and re-embedded vectors is below `min_similarity` (0.9). It is only
 meaningful if `embed_fn` uses the same embedding model and version as the stored
