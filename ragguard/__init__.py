@@ -14,6 +14,15 @@ LLM08 (Vector and Embedding Weaknesses).
 from typing import TYPE_CHECKING, Any
 
 from ragguard.boundary import Boundary, BoundaryResult, ContentBlockedError, ContentBoundary
+from ragguard.detectors import (
+    DetectorConfig,
+    DetectorError,
+    DetectorInput,
+    DetectorResult,
+    DetectorRun,
+    SemanticDetection,
+    SemanticDetector,
+)
 from ragguard.pipeline import (
     REPORT_SCHEMA_VERSION,
     BatchDecision,
@@ -38,7 +47,7 @@ from ragguard.scanner import (
 if TYPE_CHECKING:
     from ragguard.vector_check import VectorAssessment, VectorStoreIntegrityChecker
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # The vector checker needs numpy, which ships in the optional ``vector`` extra.
 # Import it lazily so text scanning and the worker stay standard-library only.
@@ -67,6 +76,13 @@ __all__ = [
     "ContentBlockedError",
     "ContentBoundary",
     "Document",
+    "DetectorConfig",
+    "DetectorError",
+    "DetectorInput",
+    "DetectorResult",
+    "DetectorRun",
+    "SemanticDetection",
+    "SemanticDetector",
     "DocumentDecision",
     "Finding",
     "FindingType",

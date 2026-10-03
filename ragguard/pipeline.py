@@ -11,6 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from ragguard.detectors import DetectorConfig, DetectorRun, SemanticDetector, run_detector
 from ragguard.scanner import (
     RULESET_VERSION,
     Document,
@@ -115,6 +116,7 @@ class BatchDecision:
 
     documents: tuple[DocumentDecision, ...]
     report: ScanReport
+    detector_runs: tuple[DetectorRun, ...] = ()
 
     @property
     def total(self) -> int:
@@ -183,6 +185,8 @@ class RAGPipelineGuard:
         blocking_severities: Iterable[Severity | str] = (Severity.CRITICAL, Severity.HIGH),
         family_actions: Mapping[str, IngestionDecision | str] | None = None,
         review_floor: Severity | str = Severity.MEDIUM,
+        detector: SemanticDetector | None = None,
+        detector_config: DetectorConfig | None = None,
     ):
         if not isinstance(auto_reject, bool):
             raise ValueError("auto_reject must be a bool")
@@ -202,6 +206,12 @@ class RAGPipelineGuard:
             raise ValueError("family_actions keys must be nonempty family names")
         self.scanner = scanner if scanner is not None else RAGScanner()
         self.policy = IngestionPolicy(auto_reject, severities, MappingProxyType(actions), floor)
+        if detector is not None and not callable(getattr(detector, "detect", None)):
+            raise ValueError("detector must provide a callable detect method")
+        if detector_config is not None and not isinstance(detector_config, DetectorConfig):
+            raise ValueError("detector_config must be a DetectorConfig")
+        self.detector = detector
+        self.detector_config = detector_config if detector_config is not None else DetectorConfig()
 
     @property
     def auto_reject(self) -> bool:
@@ -298,6 +308,16 @@ class RAGPipelineGuard:
     def _batch_decision(
         self, docs: list[Document], report: ScanReport, *, include_related: bool = False,
     ) -> BatchDecision:
+        detector_runs: tuple[DetectorRun, ...] = ()
+        if self.detector is not None:
+            semantic_findings, detector_runs = run_detector(
+                self.detector, docs, self.detector_config,
+            )
+            findings = [*report.findings, *semantic_findings]
+            summary = dict(report.severity_summary)
+            for finding in semantic_findings:
+                summary[finding.severity.value] = summary.get(finding.severity.value, 0) + 1
+            report = ScanReport(report.total_documents, findings, summary)
         by_index: dict[int, list[Finding]] = {}
         for finding in report.findings:
             indices: tuple[int | None, ...] = (finding.document_index,)
@@ -316,6 +336,7 @@ class RAGPipelineGuard:
                 for index, document in enumerate(docs)
             ),
             report=report,
+            detector_runs=detector_runs,
         )
 
     def ingest(
