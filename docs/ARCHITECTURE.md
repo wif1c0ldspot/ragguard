@@ -167,7 +167,7 @@ per-pair loop. These budgets are safeguards, not a production performance SLA.
 one response per line on stdout. On startup it writes a single handshake:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.2.0"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.3.0"}
 ```
 
 `package_version` is the installed distribution version, or `0+unknown` when run
@@ -245,7 +245,8 @@ gaps between these layers instead of replacing their contracts:
 
 The next architectural work should follow measured requirements:
 
-1. **Detection quality:** add a pluggable semantic detector only with a labelled,
+1. **Detection quality:** evaluate a real adapter through the [semantic interface](DETECTORS.md)
+   only with a labelled,
    representative corpus, latency limits and a defined failure policy. Current
    synthetic document detection remains 35%; these boundary fixes do not improve
    paraphrase or multilingual recall. Keep dev tuning separate from holdout.

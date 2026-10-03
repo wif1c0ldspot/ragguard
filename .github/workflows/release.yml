@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.12'
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: '0.11.1'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Verify tag belongs to main
+        run: git merge-base --is-ancestor HEAD origin/main
+      - name: Build twice and verify reproducibility
+        run: uv run --no-project --python 3.12 python scripts/build_release.py --tag "$RELEASE_TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Verify downloaded artifacts
+        run: cd release-assets && sha256sum -c SHA256SUMS
+      - name: Publish alpha release assets
+        run: >-
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease
+          --title "ragguard $RELEASE_TAG"
+          --notes-file "docs/releases/$RELEASE_TAG.md"
+          release-assets/*

@@ -2,7 +2,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/downloads/)
-[Tests and regression suite](tests/) · [Evaluation corpus](evals/)
+[Tests and regression suite](tests/) · [Evaluation corpus](evals/) ·
+[Versioned releases](https://github.com/wif1c0ldspot/ragguard/releases) ·
+[Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md)
 
 **ragguard** is a security scanner for Retrieval-Augmented Generation (RAG) pipelines. It
 detects prompt injection via poisoned documents, metadata injection, markdown/image
@@ -27,6 +29,11 @@ ragguard scans document content and metadata before ingestion or context assembl
 and separately assesses vector similarity anomalies. It uses explainable heuristics;
 findings are review signals, and a clean report is not a safety guarantee. The host
 must enforce authorization, tool permissions, output validation and scan decisions.
+
+Start with the [threat model](docs/THREAT_MODEL.md), the executable
+[authorized retrieval example](examples/retrieval_pipeline.py), and the
+[release/install guide](docs/RELEASING.md). Python 3.10–3.12 and the pinned DeepSeek
+Harness integration are tested; this remains an alpha project.
 
 ## Architecture
 
@@ -439,7 +446,7 @@ print(canonicalize("&#x49;gnore​  PREVIOUS"))   # ignore previous
 harnesses. On startup it writes one handshake line:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.2.0"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.3.0"}
 ```
 
 `package_version` is `0+unknown` when the worker runs from a source tree that is not installed.
@@ -448,6 +455,11 @@ evidence. The protocol is described by `load_schema("worker-protocol")`; the
 [DeepSeek Harness bundle](integrations/deepseek/README.md) is a TypeScript client.
 
 ## Evaluation
+
+Evaluation inputs carry [provenance and frozen holdout manifests](evals/README.md).
+The document corpus remains repository-authored synthetic data; it is not an
+independently collected real-world benchmark. A separate chunk-boundary corpus
+and custom-corpus validation make coverage gaps and external evaluation explicit.
 
 [`evals/`](evals/README.md) holds a synthetic, labelled corpus — 160 attacks in 14 categories
 and 156 benign documents (many of them hard negatives) in 12 categories, split into dev and
@@ -480,7 +492,7 @@ results and the anti-overfitting rule.
   matched", never as safe, and pair ragguard with runtime controls (instruction hierarchy, output
   validation, least privilege).
 - **Heuristic, not semantic.** Pattern families catch phrasing, not intent. Stretching regexes to
-  chase paraphrases would raise false positives; a model-based tier is on the roadmap instead.
+  chase paraphrases would raise false positives; the optional semantic adapter interface supports independently evaluated models.
 - **English-centric** word shapes. Deobfuscation folds a curated set of Cyrillic, Greek and
   Latin-extension look-alikes, not the full Unicode confusables table.
 - **False positives on technical content.** About 31% of benign HTML/JS documentation is held,
@@ -558,8 +570,10 @@ findings, and the remediation text.
 
 - [x] CI workflow (lint, type check, tests, demo smoke test, installed-wheel check)
 - [x] Synthetic evaluation corpus with a CI regression gate
-- [ ] Optional model-based detector tier behind a `Detector` interface, for paraphrased and
-      multilingual injections the regex families miss
+- [x] Optional [semantic-detector adapter interface](docs/DETECTORS.md), with bounded inputs,
+      validated outputs, fail-closed errors and observed latency/adapter-reported usage
+- [ ] Independently evaluate a real semantic model on paraphrased and multilingual attacks;
+      no model or provider client ships with the interface, and no recall gain is claimed
 - [ ] Rule pack as data, with a native TypeScript engine so JavaScript harnesses need no Python
       worker
 - [ ] Incremental and approximate-nearest-neighbour vector assessment for stores beyond the exact,

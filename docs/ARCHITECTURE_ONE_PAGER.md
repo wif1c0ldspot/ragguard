@@ -61,7 +61,8 @@ policy on your own corpus before enabling automatic rejection.
 
 **Design tradeoff:** small deterministic rules are cheap (sub-millisecond p95) and
 auditable, but miss novel phrasing and can flag benign technical material. A
-model-based detector tier and a data-driven rule pack remain roadmap items.
+provider-neutral semantic adapter interface is available; a validated model tier
+and a data-driven rule pack remain future work. See [detector contracts](DETECTORS.md).
 
 See [integration recipes](HARNESS_INTEGRATIONS.md), the
 [full architecture](ARCHITECTURE.md) and the [evaluation corpus](../evals/README.md).

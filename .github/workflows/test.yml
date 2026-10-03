@@ -1,10 +1,14 @@
 name: ragguard CI
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -18,12 +22,12 @@ jobs:
       UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
         with:
-          version: "latest"
+          version: "0.11.1"
 
       - name: Sync dependencies
         run: uv sync --locked
@@ -43,11 +47,17 @@ jobs:
       - name: Detection evaluation gate
         run: uv run --frozen python evals/run.py --quiet --check evals/thresholds.json
 
+      - name: Chunk boundary evaluation gate
+        run: uv run --frozen python evals/run.py --mode chunks --quiet --check evals/chunk-thresholds.json
+
       - name: Smoke-test attack demonstrations
         run: uv run --frozen python examples/document_poisoning_demos.py
 
       - name: Smoke-test harness boundary integration
         run: uv run --frozen python examples/harness_boundary.py
+
+      - name: Smoke-test authorized retrieval and final context enforcement
+        run: uv run --frozen python examples/retrieval_pipeline.py
 
       - name: Build distributable
         run: uv build
@@ -75,9 +85,11 @@ jobs:
     env:
       UV_PYTHON: "3.12"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: "0.11.1"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm

@@ -7,8 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { WorkerClient, type WorkerClientOptions, type SpawnWorker } from '../src/worker-client.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/worker.mjs', import.meta.url));
+// Real Node subprocesses compete with Python/integration suites in CI. These
+// tests verify protocol and lifecycle behavior, not sub-second process startup.
+// Deadline-specific cases below opt into deliberately short budgets.
 const options: WorkerClientOptions = {
-  python: 'python3', mode: 'enforce', timeoutMs: 500, maxTextChars: 1000,
+  python: 'python3', mode: 'enforce', timeoutMs: 10_000, maxTextChars: 1000,
   maxDocuments: 10, maxFrameBytes: 2048, maxPending: 4,
 };
 const documents = [{ text: 'Safe content' }];
@@ -37,7 +40,7 @@ test('reuses a worker and sends the fixed, shell-free Python command', async () 
 for (const mode of ['no-ready', 'hang', 'crash', 'malformed', 'oversized', 'unknown', 'unsafe', 'version', 'invalid-utf8', 'review', 'error', 'extra', 'ready-again',
   'ready-no-package', 'ready-extra', 'ready-bad-schema', 'ready-long-package', 'schema-mismatch']) {
   test(`fails closed for ${mode}`, async () => {
-    const client = make(mode);
+    const client = make(mode, mode === 'no-ready' || mode === 'hang' ? { timeoutMs: 500 } : {});
     try { await assert.rejects(client.check(documents), /content withheld/); }
     finally { await client.close(); }
   });

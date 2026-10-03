@@ -1,6 +1,6 @@
 {
   "name": "dsh-ragguard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local ragguard content policy for DeepSeek Harness tool results",
   "type": "module",
   "license": "MIT",

@@ -5,6 +5,27 @@ All notable changes to ragguard. Format: keep-a-changelog; versions follow the p
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-03
+
+### Added
+
+- Optional provider-neutral semantic detector adapters, validated typed results,
+  fail-closed errors, occurrence-based findings, observed latency and optional
+  adapter-reported usage. No model or semantic detection accuracy is bundled.
+- Provenance manifests and frozen holdout integrity checks, custom-corpus
+  validation, and a separate synthetic chunk-boundary evaluation gate.
+- Executable authorized retrieval-to-context example with review/error withholding.
+- Contributor/security guides, threat model and public issue templates.
+- Double-build release verification, SHA-256 artifact checksums, build metadata,
+  pinned CI actions and dependency update configuration.
+
+### Changed
+
+- DeepSeek bundle version is 0.1.1. Python report schema remains 1.1 and worker
+  protocol remains 1; the default heuristic detector is unchanged.
+
+### Included boundary hardening
+
 Ruleset `2026.10.2`; report schema `1.1` and worker protocol `1` are unchanged.
 
 ### Added
