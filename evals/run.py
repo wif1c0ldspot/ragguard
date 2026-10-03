@@ -93,6 +93,7 @@ def load_corpus(
                 entries.append(entry)
     if not entries:
         raise ValueError("corpus must not be empty")
+    validate_split_groups(entries)
     return entries
 
 
@@ -215,6 +216,37 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4) if denominator else None
 
 
+def wilson_interval(successes: int, total: int) -> list[float] | None:
+    """Two-sided 95% Wilson interval; descriptive if observations are correlated."""
+    if not total:
+        return None
+    z = 1.959963984540054
+    p = successes / total
+    scale = 1 + z * z / total
+    center = (p + z * z / (2 * total)) / scale
+    half = z * math.sqrt(p * (1 - p) / total + z * z / (4 * total * total)) / scale
+    return [round(max(0.0, center - half), 6), round(min(1.0, center + half), 6)]
+
+
+def validate_split_groups(entries: Sequence[dict[str, Any]]) -> None:
+    """Keep all derivatives of an external source/family on one side of the split."""
+    splits: dict[tuple[str, str, str], str] = {}
+    for entry in entries:
+        source = entry.get("source_id")
+        if source is None:
+            continue
+        if not isinstance(source, str) or not source:
+            raise ValueError("source_id must be a nonempty string")
+        for field in ("origin_id", "split_group"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"external records require nonempty {field}")
+            key = (source, field, value)
+            if key in splits and splits[key] != entry["split"]:
+                raise ValueError(f"source/family leakage across splits: {source}/{field}/{value}")
+            splits[key] = entry["split"]
+
+
 def _percentile(values: Sequence[float], pct: float) -> float | None:
     if not values:
         return None
@@ -232,6 +264,8 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     flagged = [r for r in benign if r["decision"] != "accept"]
     false_blocks = [r for r in benign if r["decision"] == "reject"]
     latencies = [r["latency_ms"] for r in records]
+    tp, fp = len(detected), len(flagged)
+    fn, tn = len(attacks) - tp, len(benign) - fp
 
     def by_category(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
@@ -258,7 +292,18 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         }
 
     return {
+        "confusion": {"tp": tp, "fp": fp, "tn": tn, "fn": fn,
+                      "positive_definition": "decision != accept"},
+        "confidence_intervals_95": {
+            "method": "Wilson; assumes independent Bernoulli observations",
+            "attack_detection_rate": wilson_interval(tp, len(attacks)),
+            "attack_block_rate": wilson_interval(len(blocked), len(attacks)),
+            "benign_false_positive_rate": wilson_interval(fp, len(benign)),
+            "benign_false_block_rate": wilson_interval(len(false_blocks), len(benign)),
+            "precision": wilson_interval(tp, tp + fp),
+        },
         "overall": {
+            "precision": _rate(tp, tp + fp),
             "attack_count": len(attacks),
             "benign_count": len(benign),
             "attacks_detected": len(detected),

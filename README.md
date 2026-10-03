@@ -15,7 +15,7 @@ Findings map to the **OWASP Top 10 for LLM Applications 2025** — primarily LLM
 Injection), LLM02 (Sensitive Information Disclosure), LLM05 (Improper Output Handling),
 LLM07 (System Prompt Leakage) and LLM08 (Vector and Embedding Weaknesses).
 
-Detection is **heuristic and explainable**: 19 named text families (ruleset `2026.10.2`) plus
+Detection is **heuristic and explainable**: 19 named text families (ruleset `2026.10.3`) plus
 three vector-store checks. Every finding names the family that fired, so results are auditable
 rather than a black-box score. Coverage is limited — on the bundled synthetic corpus the default
 policy flags 35% of attacks (see [Evaluation](#evaluation) and
@@ -419,7 +419,7 @@ report = guard.scanner.scan_documents([Document(text="Ignore all previous instru
 guard.export_report(report, "scan-report.json")
 
 schema = load_schema("report")       # or load_schema("worker-protocol")
-print(schema["$defs"]["schemaVersion"]["const"])   # 1.1
+print(schema["$defs"]["schemaVersion"]["const"])   # 1.2
 
 # Validation needs a JSON Schema library (jsonschema is in the dev dependency group).
 import jsonschema
@@ -428,7 +428,7 @@ with open("scan-report.json", encoding="utf-8") as handle:
     jsonschema.Draft202012Validator(schema).validate(json.load(handle))
 ```
 
-Every report carries `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.1`) and
+Every report carries `schema_version` (`REPORT_SCHEMA_VERSION`, currently `1.2`) and
 `ruleset_version` (`RULESET_VERSION`). The schemas ship as package data, so `load_schema` works
 from an installed wheel.
 
@@ -446,7 +446,7 @@ print(canonicalize("&#x49;gnore​  PREVIOUS"))   # ignore previous
 harnesses. On startup it writes one handshake line:
 
 ```json
-{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.2", "schema_version": "1.1", "package_version": "0.3.0"}
+{"protocol": 1, "type": "ready", "ruleset_version": "2026.10.3", "schema_version": "1.2", "package_version": "0.4.0a1"}
 ```
 
 `package_version` is `0+unknown` when the worker runs from a source tree that is not installed.
@@ -470,14 +470,14 @@ uv run python evals/run.py                                  # console summary
 uv run python evals/run.py --check evals/thresholds.json    # regression gate (runs in CI)
 ```
 
-Current results for ruleset `2026.10.2` with `RAGPipelineGuard(auto_reject=True)` and the default
+Current results for ruleset `2026.10.3` with `RAGPipelineGuard(auto_reject=True)` and the default
 review floor, on all entries:
 
-| Metric | 2026.10.2 | 2026.09.1 (0.1.x policy) |
+| Metric | 2026.10.3 | 2026.09.1 (0.1.x policy) |
 |---|---|---|
 | Attack detection (review or reject) | **35.0%** | 25.0% |
 | Benign false-positive rate | **5.1%** | 9.0% |
-| p95 latency per document | 0.10 ms | — |
+| p95 latency per document | See reproducible evaluation reports | — |
 
 CI fails if detection, block or false-positive rates regress past `evals/thresholds.json`. Tune
 rules against the dev split only; see the [evaluation README](evals/README.md) for per-category
@@ -573,7 +573,7 @@ findings, and the remediation text.
 - [x] Optional [semantic-detector adapter interface](docs/DETECTORS.md), with bounded inputs,
       validated outputs, fail-closed errors and observed latency/adapter-reported usage
 - [ ] Independently evaluate a real semantic model on paraphrased and multilingual attacks;
-      no model or provider client ships with the interface, and no recall gain is claimed
+      an offline pinned adapter is available, but no weights or measured semantic recall gain ship
 - [ ] Rule pack as data, with a native TypeScript engine so JavaScript harnesses need no Python
       worker
 - [ ] Incremental and approximate-nearest-neighbour vector assessment for stores beyond the exact,
@@ -601,3 +601,14 @@ handshake and real tool-registry tests. See its README for installation and cove
 
 For a proposed local-first ingestion, chunking, ranking and evaluation pipeline, see the
 [RAG ingestion and retrieval proposal](docs/proposals/rag-ingestion-retrieval.md).
+
+
+### Development correctness and evaluation work
+
+The development tree targets `0.4.0a1` with report schema `1.2` and ruleset
+`2026.10.3`. See [verification and remaining experiments](docs/IMPROVEMENT_VERIFICATION.md)
+for completeness semantics, external benchmark results, optional offline model
+calibration and executable memory/action boundaries. Strict schema consumers
+must upgrade from 1.1; existing OWASP 2025 strings remain intact alongside
+versioned 2026 mappings. These changes do not establish production accuracy or
+complete OWASP coverage.

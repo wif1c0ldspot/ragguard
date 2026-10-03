@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -35,6 +36,17 @@ class SemanticDetection:
 
 
 @dataclass(frozen=True)
+class DetectorProvenance:
+    """Adapter/config identity; calibration quality must be evaluated separately."""
+
+    adapter: str
+    model_id: str
+    model_revision: str
+    config_sha256: str
+    calibration_sha256: str
+
+
+@dataclass(frozen=True)
 class DetectorResult:
     """Typed output and optional adapter-reported usage (not independently verified)."""
 
@@ -42,6 +54,7 @@ class DetectorResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    provenance: DetectorProvenance | None = None
 
 
 class SemanticDetector(Protocol):
@@ -85,6 +98,7 @@ class DetectorRun:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    provenance: DetectorProvenance | None = None
 
 
 class DetectorError(RuntimeError):
@@ -128,6 +142,15 @@ def _validate_result(result: DetectorResult, config: DetectorConfig) -> None:
             raise ValueError("token usage must be a nonnegative integer")
     if result.cost_usd is not None:
         _number("cost_usd", result.cost_usd)
+    if result.provenance is not None:
+        if not isinstance(result.provenance, DetectorProvenance):
+            raise ValueError("invalid detector provenance")
+        for value in vars(result.provenance).values():
+            if type(value) is not str or not value or len(value) > 256:
+                raise ValueError("invalid detector provenance field")
+        for digest in (result.provenance.config_sha256, result.provenance.calibration_sha256):
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("invalid detector provenance SHA256")
 
 
 def run_detector(
@@ -156,7 +179,8 @@ def run_detector(
                 f"Semantic detector failed at document index {index}", tuple(runs),
             ) from exc
         runs.append(DetectorRun(index, elapsed, "ok", len(result.detections),
-                                result.input_tokens, result.output_tokens, result.cost_usd))
+                                result.input_tokens, result.output_tokens, result.cost_usd,
+                                result.provenance))
         for detection in result.detections:
             findings.append(Finding(
                 finding_type=FindingType.PROMPT_INJECTION_IN_DOCUMENT,

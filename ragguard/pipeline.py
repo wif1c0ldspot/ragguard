@@ -16,14 +16,16 @@ from ragguard.scanner import (
     RULESET_VERSION,
     Document,
     Finding,
+    FindingType,
     RAGScanner,
     ScanReport,
     Severity,
     resolve_document_id,
 )
+from ragguard.taxonomy import owasp_mappings
 
-# 1.1 adds ``advisory_families`` to every per-document result.
-REPORT_SCHEMA_VERSION = "1.1"
+# 1.2 adds completeness, versioned risk mappings, and detector-run provenance.
+REPORT_SCHEMA_VERSION = "1.2"
 
 SEVERITY_RANK: Mapping[Severity, int] = MappingProxyType({
     Severity.INFO: 0,
@@ -59,7 +61,7 @@ class IngestionPolicy:
 
 def _serialize_finding(finding: Finding) -> dict[str, Any]:
     """Use the scanner's redacted evidence consistently on every output path."""
-    return {
+    result = {
         ("type" if name == "finding_type" else name): (
             value.value if isinstance(value, Enum)
             else list(value) if isinstance(value, tuple)
@@ -67,6 +69,8 @@ def _serialize_finding(finding: Finding) -> dict[str, Any]:
         )
         for name, value in asdict(finding).items()
     }
+    result["owasp_mappings"] = owasp_mappings(finding.owasp_mapping)
+    return result
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,16 @@ class DocumentDecision:
     findings: tuple[Finding, ...]
     families: tuple[str, ...]
     advisory_families: tuple[str, ...]
+
+    @property
+    def scan_complete(self) -> bool:
+        """Whether configured scanner work completed, not a guarantee of safety."""
+        return not self.incomplete_reasons
+
+    @property
+    def incomplete_reasons(self) -> tuple[str, ...]:
+        return tuple(sorted({finding.evidence for finding in self.findings
+                             if finding.finding_type is FindingType.SCAN_INCOMPLETE}))
 
     @property
     def accepted(self) -> bool:
@@ -106,6 +120,8 @@ class DocumentDecision:
             "findings_count": len(self.findings),
             "families": list(self.families),
             "advisory_families": list(self.advisory_families),
+            "scan_complete": self.scan_complete,
+            "incomplete_reasons": list(self.incomplete_reasons),
             "findings": [_serialize_finding(finding) for finding in self.findings],
         }
 
@@ -144,12 +160,14 @@ class BatchDecision:
             "ruleset_version": RULESET_VERSION,
             "total": self.total,
             "clean": self.clean,
+            "scan_complete": self.report.scan_complete,
             "summary": self.report.summary(),
             "severity_summary": self.report.severity_summary,
             "accepted_count": self.accepted_count,
             "review_count": self.review_count,
             "rejected_count": self.rejected_count,
             "documents": [document.to_dict() for document in self.documents],
+            "detector_runs": [asdict(run) for run in self.detector_runs],
         }
 
 
@@ -223,11 +241,15 @@ class RAGPipelineGuard:
 
     def _is_advisory(self, finding: Finding) -> bool:
         return (
-            finding.family not in self.policy.family_actions
+            finding.finding_type is not FindingType.SCAN_INCOMPLETE
+            and finding.family not in self.policy.family_actions
             and SEVERITY_RANK[Severity(finding.severity)] < SEVERITY_RANK[self.policy.review_floor]
         )
 
     def _action(self, finding: Finding) -> IngestionDecision:
+        # Operational incompleteness cannot be downgraded by a family override.
+        if finding.finding_type is FindingType.SCAN_INCOMPLETE:
+            return IngestionDecision.REJECT
         action = self.policy.family_actions.get(finding.family)
         if action is not None:
             return action
@@ -368,6 +390,7 @@ class RAGPipelineGuard:
             "schema_version": REPORT_SCHEMA_VERSION,
             "ruleset_version": RULESET_VERSION,
             "total_documents": report.total_documents,
+            "scan_complete": report.scan_complete,
             "summary": report.summary(),
             "severity_summary": report.severity_summary,
             "findings": [_serialize_finding(finding) for finding in report.findings],
