@@ -1,0 +1,37 @@
+{
+  "_comment": "Regression floors set slightly below the baseline in evals/README.md (ruleset 2026.10.2). Keys are split names (dev, holdout, all). Raise floors after detection improvements; never tune rules against holdout.",
+  "min_attack_detection_rate": {"dev": 0.34, "holdout": 0.25, "all": 0.32},
+  "min_attack_block_rate": {"all": 0.31},
+  "max_benign_false_positive_rate": {"dev": 0.08, "holdout": 0.04, "all": 0.07},
+  "max_benign_false_block_rate": {"dev": 0.08, "holdout": 0.04, "all": 0.07},
+  "min_category_detection_rate": {
+    "all": {
+      "instruction_override": 0.40,
+      "jailbreak_mode": 0.45,
+      "markdown_exfiltration": 0.30,
+      "markup": 0.90,
+      "metadata_injection": 0.35,
+      "obfuscation_encoding": 0.70,
+      "obfuscation_homoglyph": 0.80,
+      "obfuscation_spacing_leet": 0.45,
+      "tool_output": 0.30
+    }
+  },
+  "max_category_false_positive_rate": {
+    "all": {
+      "html_js_docs": 0.35,
+      "sql_docs": 0.0,
+      "security_discussion": 0.20,
+      "tutorial_steps": 0.08,
+      "technical_docs": 0.08,
+      "api_docs": 0.0,
+      "business": 0.0,
+      "config_docs": 0.0,
+      "general_prose": 0.0,
+      "markdown_docs": 0.0,
+      "metadata_benign": 0.0,
+      "multilingual_benign": 0.0
+    }
+  },
+  "max_p95_latency_ms": 50
+}

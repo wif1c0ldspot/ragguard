@@ -1,0 +1,7 @@
+# Maintained optional CPU evaluation runtime; Python 3.12, macOS arm64 >=14.
+# SymPy 1.14 requires mpmath<1.4; do not merge a standalone incompatible bump.
+torch==2.14.0
+transformers==5.10.1
+sentencepiece==0.2.2
+mpmath>=1.1,<1.4
+protobuf>=6.33.6

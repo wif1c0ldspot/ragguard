@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/wif1c0ldspot/ragguard/main/ragguard/schemas/worker-protocol.schema.json",
+  "title": "ragguard worker protocol",
+  "description": "JSON Lines frames exchanged with `python -m ragguard.worker`. The worker sends one ready message, then exactly one success or error response per request line. Responses never contain scanned text, metadata or evidence.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/ready"
+    },
+    {
+      "$ref": "#/$defs/success"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
+  ],
+  "$defs": {
+    "protocol": {
+      "const": 1
+    },
+    "versionString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "schemaVersion": {
+      "description": "Report schema version; equals the value announced in the ready message.",
+      "const": "1.3"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "\\S"
+    },
+    "request": {
+      "description": "Client to worker. Document count and text length are bounded by worker configuration.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "id",
+        "documents"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "documents": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "text"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "ready": {
+      "description": "Worker to client, sent once before any response.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "type",
+        "ruleset_version",
+        "schema_version",
+        "package_version"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "type": {
+          "const": "ready"
+        },
+        "ruleset_version": {
+          "$ref": "#/$defs/versionString"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersion"
+        },
+        "package_version": {
+          "description": "Installed ragguard distribution version, or 0+unknown when not installed.",
+          "$ref": "#/$defs/versionString"
+        }
+      }
+    },
+    "success": {
+      "description": "Aggregate decision for every document in one request.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "id",
+        "ok",
+        "release",
+        "decision",
+        "families",
+        "ruleset_version",
+        "schema_version"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "ok": {
+          "const": true
+        },
+        "release": {
+          "type": "boolean"
+        },
+        "decision": {
+          "enum": [
+            "accept",
+            "review",
+            "reject"
+          ]
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "ruleset_version": {
+          "$ref": "#/$defs/versionString"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/schemaVersion"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "accept"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "release": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "const": "reject"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "release": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "error": {
+      "description": "Generic failure; content is always withheld. id is null when the frame could not be parsed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "id",
+        "ok",
+        "release",
+        "error"
+      ],
+      "properties": {
+        "protocol": {
+          "$ref": "#/$defs/protocol"
+        },
+        "id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/requestId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ok": {
+          "const": false
+        },
+        "release": {
+          "const": false
+        },
+        "error": {
+          "const": "request_failed"
+        }
+      }
+    }
+  }
+}

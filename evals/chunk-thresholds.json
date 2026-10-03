@@ -1,0 +1,11 @@
+{
+  "_comment": "Synthetic chunk regression gates, ruleset 2026.10.2. Case-level decisions use the most restrictive chunk decision. Semantic/non-English/window-limit misses and educational quotation false positives remain visible; no scanner tuning on holdout.",
+  "min_attack_detection_rate": {"dev": 0.62, "holdout": 0.62, "all": 0.62},
+  "min_attack_block_rate": {"all": 0.62},
+  "max_benign_false_positive_rate": {"dev": 0.0, "holdout": 0.125, "all": 0.0625},
+  "max_benign_false_block_rate": {"dev": 0.0, "holdout": 0.125, "all": 0.0625},
+  "min_category_detection_rate": {
+    "all": {"boundary_plain": 1.0, "boundary_encoded": 1.0, "boundary_obfuscated": 1.0, "contained_attack": 1.0, "metadata_attack": 1.0}
+  },
+  "max_p95_latency_ms": 50
+}

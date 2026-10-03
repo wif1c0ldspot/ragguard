@@ -1,0 +1,6 @@
+- insert:
+    - id: ragguard
+      name: dsh-ragguard
+      config:
+        python: python3
+        mode: enforce

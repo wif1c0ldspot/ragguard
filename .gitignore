@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+.venv-review-cache/
+.venv-dsh/
+venv/
+env/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Test & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# DeepSeek plugin development
+node_modules/
+*.tgz
+
+# node_modules can also appear as a symlink; the trailing-slash rule only matches dirs
+node_modules
+
+# Agent tooling
+.claude/
+
+# Local evaluation weights and download caches; never distributed
+.eval-cache/

@@ -1,0 +1,120 @@
+name: ragguard CI
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    env:
+      # setup-uv v3 installs uv only; select Python for every uv command.
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: "0.11.1"
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Verify selected interpreter
+        run: uv run --frozen python -c "import sys; assert '.'.join(map(str, sys.version_info[:2])) == '${{ matrix.python-version }}'"
+
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+      - name: Type check
+        run: uv run --frozen mypy ragguard
+
+      - name: Tests
+        run: uv run --frozen pytest --cov=ragguard --cov-report=term-missing
+
+      - name: Detection evaluation gate
+        run: uv run --frozen python evals/run.py --quiet --check evals/thresholds.json
+
+      - name: Chunk boundary evaluation gate
+        run: uv run --frozen python evals/run.py --mode chunks --quiet --check evals/chunk-thresholds.json
+
+      - name: Smoke-test attack demonstrations
+        run: uv run --frozen python examples/document_poisoning_demos.py
+
+      - name: Smoke-test harness boundary integration
+        run: uv run --frozen python examples/harness_boundary.py
+
+      - name: Smoke-test authorized retrieval and final context enforcement
+        run: uv run --frozen python examples/retrieval_pipeline.py
+
+      - name: Smoke-test memory and action enforcement
+        run: |
+          uv run --frozen python examples/guarded_memory.py
+          uv run --frozen python examples/agent_controls.py
+
+      - name: Build distributable
+        run: uv build
+
+      - name: Verify installed wheel outside source tree
+        run: |
+          uv venv "$RUNNER_TEMP/ragguard-wheel" --python "${{ matrix.python-version }}"
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/ragguard-runtime.txt"
+          uv pip install --python "$RUNNER_TEMP/ragguard-wheel/bin/python" -r "$RUNNER_TEMP/ragguard-runtime.txt"
+          uv pip install --python "$RUNNER_TEMP/ragguard-wheel/bin/python" --no-deps dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/ragguard-wheel/bin/python" -I -c "from ragguard import ContentBoundary, Document; assert ContentBoundary().require(Document('Useful facts.')) == 'Useful facts.'"
+          # The base install is standard-library only: schemas ship as package data
+          # and the vector checker explains how to install its extra.
+          "$RUNNER_TEMP/ragguard-wheel/bin/python" -I -c "import importlib.util, ragguard; assert importlib.util.find_spec('numpy') is None; assert ragguard.load_schema('report')['\$schema']; ragguard.load_schema('worker-protocol')
+          try:
+              ragguard.VectorStoreIntegrityChecker
+          except ImportError as exc:
+              assert 'ragguard[vector]' in str(exc)
+          else:
+              raise SystemExit('expected ImportError without numpy')"
+
+  deepseek-plugin:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: "0.11.1"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: integrations/deepseek/package-lock.json
+      - run: uv sync --locked
+      - run: npm --prefix integrations/deepseek ci
+      - run: npm --prefix integrations/deepseek run typecheck
+      - name: Test real harness registry and Python worker
+        run: RAGGUARD_TEST_PYTHON="$PWD/.venv/bin/python" npm --prefix integrations/deepseek test
+      - run: npm pack --pack-destination "$RUNNER_TEMP"
+        working-directory: integrations/deepseek
+      - name: Verify packed JavaScript with installed Python wheel
+        run: |
+          uv build
+          uv venv "$RUNNER_TEMP/ragguard-plugin-wheel" --python "3.12"
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/ragguard-plugin-runtime.txt"
+          uv pip install --python "$RUNNER_TEMP/ragguard-plugin-wheel/bin/python" -r "$RUNNER_TEMP/ragguard-plugin-runtime.txt"
+          uv pip install --python "$RUNNER_TEMP/ragguard-plugin-wheel/bin/python" --no-deps dist/*.whl
+          mkdir -p "$RUNNER_TEMP/ragguard-npm"
+          tar -xzf "$RUNNER_TEMP"/dsh-ragguard-*.tgz -C "$RUNNER_TEMP/ragguard-npm"
+          cd "$RUNNER_TEMP"
+          RAGGUARD_TEST_PYTHON="$RUNNER_TEMP/ragguard-plugin-wheel/bin/python" node "$GITHUB_WORKSPACE/integrations/deepseek/tests/package-smoke.mjs" "$RUNNER_TEMP/ragguard-npm/package"

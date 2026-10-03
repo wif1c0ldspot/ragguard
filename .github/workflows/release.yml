@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/test.yml
+
+  verify-semantic-runtime:
+    uses: ./.github/workflows/semantic-runtime.yml
+
+  build:
+    needs: [verify, verify-semantic-runtime]
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.12'
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: '0.11.1'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Verify tag belongs to main
+        run: git merge-base --is-ancestor HEAD origin/main
+      - name: Build twice and verify reproducibility
+        run: uv run --no-project --python 3.12 python scripts/build_release.py --tag "$RELEASE_TAG"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Verify downloaded artifacts
+        run: cd release-assets && sha256sum -c SHA256SUMS
+      - name: Publish alpha release assets
+        run: >-
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease
+          --title "ragguard $RELEASE_TAG"
+          --notes-file "docs/releases/$RELEASE_TAG.md"
+          release-assets/*
