@@ -12,9 +12,11 @@ Standard library only (plus ``ragguard``). Importable: ``evaluate(entries, guard
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import math
+import platform
 import sys
 import time
 from collections.abc import Iterable, Sequence
@@ -24,6 +26,8 @@ from typing import Any
 EVALS_DIR = Path(__file__).resolve().parent
 CORPUS_DIR = EVALS_DIR / "corpus"
 CORPUS_FILES = (CORPUS_DIR / "attacks.jsonl", CORPUS_DIR / "benign.jsonl")
+CHUNK_FILES = (CORPUS_DIR / "chunks.jsonl",)
+MANIFEST_FILE = EVALS_DIR / "manifest.json"
 SPLITS = ("dev", "holdout", "all")
 REQUIRED_FIELDS = ("id", "text", "metadata", "label", "category", "split", "notes")
 
@@ -31,9 +35,48 @@ REQUIRED_FIELDS = ("id", "text", "metadata", "label", "category", "split", "note
 # --------------------------------------------------------------------------- corpus
 
 
-def load_corpus(paths: Iterable[Path] = CORPUS_FILES) -> list[dict[str, Any]]:
-    """Load JSONL corpus files; entries keep file order."""
+def corpus_digest(entries: Sequence[dict[str, Any]]) -> str:
+    """Hash canonical records by ID; file formatting/order does not affect identity."""
+    encoded = json.dumps(sorted(entries, key=lambda item: item["id"]),
+                         sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def validate_entry(entry: Any, *, mode: str = "documents") -> None:
+    """Validate imported labels/types before they can silently skew metrics."""
+    if not isinstance(entry, dict):
+        raise ValueError("entry must be an object")
+    required = set(REQUIRED_FIELDS)
+    if mode == "chunks":
+        required = (required - {"text", "metadata"}) | {"chunks", "window_chars"}
+    missing = required - entry.keys()
+    if missing:
+        raise ValueError(f"missing fields {sorted(missing)}")
+    for name in ("id", "category", "notes"):
+        if not isinstance(entry[name], str) or not entry[name].strip():
+            raise ValueError(f"{name} must be a nonempty string")
+    if entry["label"] not in ("attack", "benign"):
+        raise ValueError("label must be attack or benign")
+    if entry["split"] not in ("dev", "holdout"):
+        raise ValueError("split must be dev or holdout")
+    chunks = entry.get("chunks") if mode == "chunks" else [entry]
+    if not isinstance(chunks, list) or not chunks:
+        raise ValueError("chunks must be a nonempty list")
+    if mode == "chunks" and (type(entry["window_chars"]) is not int or entry["window_chars"] < 1):
+        raise ValueError("window_chars must be a positive integer")
+    for chunk in chunks:
+        if not isinstance(chunk, dict) or not isinstance(chunk.get("text"), str):
+            raise ValueError("text must be a string")
+        if chunk.get("metadata") is not None and not isinstance(chunk["metadata"], dict):
+            raise ValueError("metadata must be an object or null")
+
+
+def load_corpus(
+    paths: Iterable[Path] = CORPUS_FILES, *, mode: str = "documents",
+) -> list[dict[str, Any]]:
+    """Load and validate JSONL files, rejecting duplicate IDs across files."""
     entries: list[dict[str, Any]] = []
+    ids: set[str] = set()
     for path in paths:
         with open(path, encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -41,13 +84,57 @@ def load_corpus(paths: Iterable[Path] = CORPUS_FILES) -> list[dict[str, Any]]:
                     continue
                 try:
                     entry = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"{path.name}:{lineno}: invalid JSON: {exc}") from exc
-                missing = [field for field in REQUIRED_FIELDS if field not in entry]
-                if missing:
-                    raise ValueError(f"{path.name}:{lineno}: missing fields {missing}")
+                    validate_entry(entry, mode=mode)
+                    if entry["id"] in ids:
+                        raise ValueError(f"duplicate id {entry['id']!r}")
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"{path.name}:{lineno}: {exc}") from exc
+                ids.add(entry["id"])
                 entries.append(entry)
+    if not entries:
+        raise ValueError("corpus must not be empty")
     return entries
+
+
+def verify_manifest(paths: Sequence[Path], manifest_path: Path, mode: str) -> list[dict[str, Any]]:
+    """Verify frozen holdout content and explicit provenance for every input file.
+
+    Hashes detect accidental edits, not malicious replacement of the manifest.
+    External source/license declarations are supplied by the importer, not certified.
+    """
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1
+            or not isinstance(manifest.get("corpora"), list)):
+        raise ValueError("unsupported corpus manifest")
+    indexed = {}
+    for item in manifest["corpora"]:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            raise ValueError("manifest entries require a path string")
+        path = (manifest_path.parent / item["path"]).resolve()
+        if path in indexed:
+            raise ValueError(f"duplicate manifest path {item['path']}")
+        indexed[path] = item
+    verified = []
+    for path in paths:
+        item = indexed.get(path.resolve())
+        if item is None or item.get("mode") != mode:
+            raise ValueError(f"{path.name}: missing manifest entry for mode {mode}")
+        provenance = item.get("provenance")
+        if (not isinstance(provenance, dict)
+                or provenance.get("kind") not in ("synthetic", "external")):
+            raise ValueError(f"{path.name}: provenance kind must be synthetic or external")
+        for field in ("source", "license", "collection_method"):
+            if not isinstance(provenance.get(field), str) or not provenance[field].strip():
+                raise ValueError(f"{path.name}: missing provenance {field}")
+        entries = load_corpus([path], mode=mode)
+        holdout = filter_split(entries, "holdout")
+        if not holdout or len(holdout) != item.get("holdout_count"):
+            raise ValueError(f"{path.name}: frozen holdout count changed or is empty")
+        if corpus_digest(holdout) != item.get("holdout_sha256"):
+            raise ValueError(f"{path.name}: frozen holdout SHA-256 mismatch")
+        verified.append({"path": item["path"], "provenance": provenance,
+                         "holdout_count": len(holdout), "holdout_sha256": corpus_digest(holdout)})
+    return verified
 
 
 def filter_split(items: Iterable[dict[str, Any]], split: str) -> list[dict[str, Any]]:
@@ -87,12 +174,29 @@ def ruleset_version() -> str | None:
 # --------------------------------------------------------------------------- metrics
 
 
-def run_entries(entries: Sequence[dict[str, Any]], guard: Any) -> list[dict[str, Any]]:
+def run_entries(
+    entries: Sequence[dict[str, Any]], guard: Any, *, mode: str = "documents",
+) -> list[dict[str, Any]]:
     """Ingest each entry once; return one record per entry (no text)."""
     records = []
     for entry in entries:
         start = time.perf_counter()
-        result = guard.ingest(entry["text"], entry.get("metadata"), id=entry["id"])
+        if mode == "chunks":
+            from ragguard import Document
+
+            batch = guard.evaluate_chunks([
+                Document(chunk["text"], metadata=chunk.get("metadata"), id=f"{entry['id']}:{i}")
+                for i, chunk in enumerate(entry["chunks"])
+            ], window_chars=entry["window_chars"])
+            decisions = [document.decision.value for document in batch.documents]
+            result = {
+                "decision": ("reject" if "reject" in decisions else
+                             "review" if "review" in decisions else "accept"),
+                "families": [family for document in batch.documents
+                             for family in document.families],
+            }
+        else:
+            result = guard.ingest(entry["text"], entry.get("metadata"), id=entry["id"])
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         records.append({
             "id": entry["id"],
@@ -102,6 +206,7 @@ def run_entries(entries: Sequence[dict[str, Any]], guard: Any) -> list[dict[str,
             "decision": str(result["decision"]),
             "families": sorted(set(result.get("families") or [])),
             "latency_ms": elapsed_ms,
+            **({"chunk_decisions": decisions} if mode == "chunks" else {}),
         })
     return records
 
@@ -212,6 +317,7 @@ def check_thresholds(
 
     def compare(label: str, actual: float | None, bound: float, kind: Any) -> None:
         if actual is None:
+            violations.append(f"{label}: no samples for required metric")
             return
         if kind is min and actual < bound:
             violations.append(f"{label}: {actual:.4f} < minimum {bound}")
@@ -338,18 +444,28 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--split", choices=SPLITS, default="all")
+    parser.add_argument("--mode", choices=("documents", "chunks"), default="documents")
+    parser.add_argument("--manifest", type=Path, help="provenance and frozen holdout manifest")
     parser.add_argument("--json", type=Path, help="write the full JSON report here")
     parser.add_argument("--markdown", type=Path, help="write a Markdown summary here")
     parser.add_argument("--check", type=Path, help="thresholds JSON; exit 1 on violation")
     parser.add_argument("--review-floor", default=None,
                         help="passed to RAGPipelineGuard if it accepts review_floor")
-    parser.add_argument("--corpus", type=Path, nargs="*", default=None,
+    parser.add_argument("--corpus", type=Path, nargs="+", default=None,
                         help="override corpus JSONL files")
     parser.add_argument("--quiet", action="store_true", help="suppress console summary")
     args = parser.parse_args(argv)
 
+    provenance = []
     if entries is None:
-        entries = load_corpus(args.corpus or CORPUS_FILES)
+        paths = args.corpus or (CHUNK_FILES if args.mode == "chunks" else CORPUS_FILES)
+        if args.corpus and args.manifest is None:
+            parser.error("--corpus requires --manifest with provenance and frozen holdout hashes")
+        try:
+            provenance = verify_manifest(paths, args.manifest or MANIFEST_FILE, args.mode)
+            entries = load_corpus(paths, mode=args.mode)
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            parser.error(str(exc))
     if guard is None:
         guard = build_guard(args.review_floor)
     version = ruleset_version()
@@ -359,7 +475,7 @@ def main(
         with open(args.check, encoding="utf-8") as fh:
             thresholds = json.load(fh)
 
-    records = run_entries(filter_split(entries, args.split), guard)
+    records = run_entries(filter_split(entries, args.split), guard, mode=args.mode)
     needed = {args.split}
     if thresholds:
         needed |= set(SPLITS) if args.split == "all" else {args.split}
@@ -369,7 +485,22 @@ def main(
     if not args.quiet:
         print(render_console(report, args.split, version))
     if args.json is not None:
-        payload = {"split": args.split, "ruleset_version": version, **report}
+        payload = {
+            "split": args.split, "mode": args.mode, "ruleset_version": version,
+            "corpus_sha256": corpus_digest(entries),
+            "evaluated_sha256": corpus_digest(filter_split(entries, args.split)),
+            "results_sha256": corpus_digest([
+                {key: value for key, value in record.items() if key != "latency_ms"}
+                for record in records
+            ]),
+            "provenance": provenance,
+            "records": records,
+            "runtime": {"python": platform.python_version(), "platform": platform.platform()},
+            "configuration": {"auto_reject": getattr(guard, "auto_reject", None),
+                              "review_floor": getattr(getattr(guard, "policy", None),
+                                                      "review_floor", args.review_floor)},
+            **report,
+        }
         args.json.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
                              encoding="utf-8")
     if args.markdown is not None:

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-10-03",
+  "limitations": "Existing document holdout was already visible before this integrity snapshot. New chunks were authored alongside implementation. Neither is an independent benchmark; hashes prevent unnoticed edits, not training leakage.",
+  "corpora": [
+    {
+      "path": "corpus/attacks.jsonl",
+      "mode": "documents",
+      "provenance": {
+        "kind": "synthetic",
+        "source": "repository-authored fixtures",
+        "license": "MIT",
+        "collection_method": "Manually authored synthetic threat scenarios and benign controls; not sampled from production or an independent external dataset."
+      },
+      "holdout_count": 43,
+      "holdout_sha256": "20b941109c10a1e45833e43d4e33b0f8de1892959768167d1a3024f1dcf36c8a"
+    },
+    {
+      "path": "corpus/benign.jsonl",
+      "mode": "documents",
+      "provenance": {
+        "kind": "synthetic",
+        "source": "repository-authored fixtures",
+        "license": "MIT",
+        "collection_method": "Manually authored synthetic threat scenarios and benign controls; not sampled from production or an independent external dataset."
+      },
+      "holdout_count": 48,
+      "holdout_sha256": "8df08bf2397514199d9fa74249bb2ad447aeb9864fe4517e00ccdf6e25dcc9c9"
+    },
+    {
+      "path": "corpus/chunks.jsonl",
+      "mode": "chunks",
+      "provenance": {
+        "kind": "synthetic",
+        "source": "repository-authored fixtures",
+        "license": "MIT",
+        "collection_method": "Manually authored synthetic threat scenarios and benign controls; not sampled from production or an independent external dataset."
+      },
+      "holdout_count": 16,
+      "holdout_sha256": "699c71a0cbc56f89d8972e5c764c6394d23e75ce4b1c3fe521a22b3abd0dc88e"
+    }
+  ]
+}

@@ -257,3 +257,102 @@ def test_repo_thresholds_file_is_well_formed():
     report = run.evaluate(TINY, StubGuard())
     violations = run.check_thresholds(thresholds, {"all": report})
     assert not [v for v in violations if v.startswith("unknown threshold key")]
+
+
+def test_frozen_repo_document_holdout_and_provenance():
+    sources = run.verify_manifest(list(run.CORPUS_FILES), run.MANIFEST_FILE, "documents")
+    assert [source["holdout_count"] for source in sources] == [43, 48]
+    assert {source["provenance"]["kind"] for source in sources} == {"synthetic"}
+
+
+def _external_corpus(tmp_path):
+    entries = [_entry("imported-dev", "benign", "doc", "fine"),
+               _entry("imported-holdout", "attack", "cat_x", "BLOCK", "holdout")]
+    corpus = tmp_path / "external.jsonl"
+    corpus.write_text("\n".join(json.dumps(entry) for entry in entries), encoding="utf-8")
+    manifest = _write(tmp_path, "manifest.json", {
+        "schema_version": 1,
+        "corpora": [{
+            "path": corpus.name, "mode": "documents",
+            "provenance": {"kind": "external", "source": "user-supplied test fixture",
+                           "license": "test-only declaration",
+                           "collection_method": "fixture; not an authentic external dataset"},
+            "holdout_count": 1, "holdout_sha256": run.corpus_digest(entries[1:]),
+        }],
+    })
+    return entries, corpus, manifest
+
+
+def test_external_import_requires_manifest_and_reports_source(tmp_path):
+    _, corpus, manifest = _external_corpus(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        run.main(["--corpus", str(corpus)], guard=StubGuard())
+    assert exc.value.code == 2
+    output = tmp_path / "report.json"
+    assert run.main(["--corpus", str(corpus), "--manifest", str(manifest),
+                     "--json", str(output), "--quiet"], guard=StubGuard()) == 0
+    report = json.loads(output.read_text())
+    assert report["provenance"][0]["provenance"]["kind"] == "external"
+    assert len(report["corpus_sha256"]) == 64
+    assert len(report["results_sha256"]) == 64
+
+
+@pytest.mark.parametrize("mutation", ["text", "label", "split", "delete", "add"])
+def test_holdout_mutations_fail_closed(tmp_path, mutation):
+    entries, corpus, manifest = _external_corpus(tmp_path)
+    if mutation == "delete":
+        entries.pop()
+    elif mutation == "add":
+        entries.append(_entry("new-holdout", "benign", "doc", "extra", "holdout"))
+    else:
+        entries[1][mutation] = {"text": "changed", "label": "benign", "split": "dev"}[mutation]
+    corpus.write_text("\n".join(json.dumps(entry) for entry in entries), encoding="utf-8")
+    with pytest.raises(ValueError, match="frozen holdout"):
+        run.verify_manifest([corpus], manifest, "documents")
+
+
+def test_dev_can_change_without_changing_holdout(tmp_path):
+    entries, corpus, manifest = _external_corpus(tmp_path)
+    original = run.corpus_digest(entries)
+    entries[0]["text"] = "changed dev only"
+    corpus.write_text("\n".join(json.dumps(entry) for entry in entries), encoding="utf-8")
+    run.verify_manifest([corpus], manifest, "documents")
+    assert run.corpus_digest(entries) != original
+    assert run.corpus_digest(entries) == run.corpus_digest(list(reversed(entries)))
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("label", "typo"), ("split", "test"), ("id", ""), ("metadata", []),
+    ("text", None), ("category", []),
+])
+def test_invalid_imported_records_are_rejected(tmp_path, field, value):
+    entry = _entry("bad", "attack", "cat", "text")
+    entry[field] = value
+    path = _write(tmp_path, "bad.jsonl", entry)
+    with pytest.raises(ValueError, match="bad.jsonl:1"):
+        run.load_corpus([path])
+
+
+def test_duplicate_ids_across_files_are_rejected(tmp_path):
+    entry = _entry("duplicate", "attack", "cat", "text")
+    paths = [_write(tmp_path, f"{i}.jsonl", entry) for i in range(2)]
+    with pytest.raises(ValueError, match="duplicate id"):
+        run.load_corpus(paths)
+
+
+def test_threshold_with_no_required_samples_fails():
+    report = run.evaluate([_entry("benign", "benign", "doc", "fine")], StubGuard())
+    assert run.check_thresholds({"min_attack_detection_rate": {"all": 0.5}},
+                                {"all": report}) == [
+        "min_attack_detection_rate[all]: no samples for required metric",
+    ]
+
+
+def test_result_fingerprint_ignores_latency(tmp_path):
+    reports = []
+    for i in range(2):
+        path = tmp_path / f"report-{i}.json"
+        run.main(["--quiet", "--json", str(path)], entries=TINY, guard=StubGuard())
+        reports.append(json.loads(path.read_text()))
+    assert reports[0]["results_sha256"] == reports[1]["results_sha256"]
+    assert reports[0]["evaluated_sha256"] == reports[1]["evaluated_sha256"]
