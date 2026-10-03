@@ -16,7 +16,7 @@ pyyaml==6.0.3
 regex==2026.9.29
 requests==2.34.2
 safetensors==0.8.0
-sentencepiece==0.2.1
+sentencepiece==0.2.2
 setuptools==84.0.0
 sympy==1.14.0
 tokenizers==0.22.2
