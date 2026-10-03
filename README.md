@@ -1,5 +1,6 @@
 # ragguard — RAG Pipeline Security Scanner
 
+[![CI](https://github.com/wif1c0ldspot/ragguard/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/wif1c0ldspot/ragguard/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/downloads/)
 [Tests and regression suite](tests/) · [Evaluation corpus](evals/) ·
@@ -7,19 +8,37 @@
 [Contributing](CONTRIBUTING.md) · [Security reporting](SECURITY.md)
 
 **ragguard** is a security scanner for Retrieval-Augmented Generation (RAG) pipelines. It
-detects prompt injection via poisoned documents, metadata injection, markdown/image
-exfiltration, payloads split across chunk boundaries, structural risks, embedding anomalies
-and tampering, and cross-user proximity anomalies in shared vector stores.
+flags known prompt-injection patterns, suspicious metadata, markdown/image
+exfiltration templates, payloads split across chunks, and structural risks. Separate
+vector checks report similarity anomalies and vector/text inconsistencies. These
+findings require context; they do not establish malicious intent or factual truth.
 
-Findings map to the **OWASP Top 10 for LLM Applications 2025** — primarily LLM01 (Prompt
-Injection), LLM02 (Sensitive Information Disclosure), LLM05 (Improper Output Handling),
-LLM07 (System Prompt Leakage) and LLM08 (Vector and Embedding Weaknesses).
+Reports preserve **OWASP LLM Top 10 2025** labels and add explicit **2026**
+related-risk mappings. These annotations describe relevant risks; they do not
+certify OWASP compliance or prevention of an entire category.
 
-Detection is **heuristic and explainable**: 19 named text families (ruleset `2026.10.3`) plus
-three vector-store checks. Every finding names the family that fired, so results are auditable
-rather than a black-box score. Coverage is limited — on the bundled synthetic corpus the default
-policy flags 35% of attacks (see [Evaluation](#evaluation) and
-[Known limitations](#known-limitations)).
+The default scanner is local and explainable: 19 named text families (ruleset
+`2026.10.3`) plus three vector-store checks. Optional pinned local classifiers
+use separate measured calibration and remain disabled by default.
+
+**Measured limits:** the default policy detects 35% of the bundled synthetic
+attacks and 68/1,054 (6.45%) of the external InjecAgent base attacks. It flags
+0/339 NotInject benign examples, which does not establish zero production false
+positives. Keep enhanced attack variants separate: their recognizable override
+wrapper drives 100% detection. A full pinned ProtectAI classifier run scored all
+2,447 external examples but added **no held-out recall** at the chosen 5%
+development false-positive ceiling. Models remain optional and disabled by default.
+See [evaluation methods and results](evals/README.md) and
+[model reproduction](docs/MODEL_EVALUATION.md). A separate
+[six-scenario local generation probe](docs/RAG_GENERATION_PROBE.md) found no
+exact-target prevention gain and a cost to legitimate answers from blocking;
+it is a development smoke probe, not a production security benchmark.
+
+**Enforcement:** use `ContentBoundary` to withhold review, rejection, errors and
+incomplete scans before releasing text. A clean, complete scan means the configured
+checks finished without findings; it does not mean the content is safe. Report
+schema **1.2** adds completeness and detector provenance; strict 1.1 consumers must
+upgrade. See the [verification record](docs/IMPROVEMENT_VERIFICATION.md).
 
 ---
 
@@ -83,12 +102,24 @@ optional extras, not in the base install.
 
 ## Quick start
 
+For a model-context boundary, release only the value returned by `require`:
+
+```python
+from ragguard import ContentBoundary, Document
+
+context = ContentBoundary().require(Document("Useful retrieved reference material."))
+# Pass context unchanged to the model. A blocked result or scan error raises;
+# do not fall back to the unchecked input.
+```
+
+For detailed policy inspection:
+
 ```python
 from ragguard import RAGPipelineGuard
 
 guard = RAGPipelineGuard(auto_reject=True)
 
-# Safe document — passes through
+# Benign example — no configured pattern is detected
 result = guard.ingest(
     text="This is a legitimate technical document about cloud security.",
     metadata={"source": "internal_wiki", "author": "engineering-team"},
@@ -129,7 +160,7 @@ correlate by input occurrence, not the fingerprint. Always correlate findings wi
 | Data-exfiltration phrasing | `data_exfiltration` | high | **LLM02** |
 | Markdown / image exfiltration | `markdown_exfiltration` — images, `<img>` tags or query-string links whose URL carries a template placeholder (`{{conversation}}`, `${secret}`, `[DATA]` …) | high | **LLM02** |
 | Metadata injection | `metadata_tool_call`, `metadata_code_execution`, `metadata_credential_leak` (critical); `metadata_key_value_payload`, `metadata_exfiltration_command` (high). Metadata leaves are also scanned with the injection families. | critical / high | LLM01, **LLM02** |
-| Payload split across chunks | `split_payload` — an injection family that matches across a chunk boundary but in neither chunk alone (`scan_chunks()` / `evaluate_chunks()`) | that family's severity | LLM01 |
+| Payload split across chunks | `split_payload` — an injection family that has a match crossing a chunk boundary, including when another match exists within a chunk (`scan_chunks()` / `evaluate_chunks()`) | that family's severity | LLM01 |
 | Chunk-splitting markers | `split_marker_open`, `split_marker_close` | info (advisory) | LLM01 |
 | Structural risks | `structural_dangerous_tag` (executable tags, real DOM event-handler attributes), `structural_sql_keyword` | low (advisory) | **LLM05** |
 | Canonical bypass | `canonical_override_plus_action` | critical | LLM01 |
@@ -339,7 +370,7 @@ Lexical similarity is the maximum of word-set Jaccard and character 3-gram Jacca
 20,000 characters of each text. Pairwise similarity is computed in row tiles of `block_size`
 (default 256), so memory stays O(block_size × documents).
 
-The reliable tampering signal is **re-embedding verification**: `assess_embedding_fidelity`
+The vector/text inconsistency signal is **re-embedding verification**: `assess_embedding_fidelity`
 re-embeds each stored text with your embedding function and flags stored vectors that diverge.
 `embed_fn` must use the **same embedding model and version** that produced the stored vectors;
 otherwise every document may be flagged.
@@ -491,7 +522,7 @@ results and the anti-overfitting rule.
   that avoid the canonical phrasings at **9%**. Treat a clean scan as "no known pattern
   matched", never as safe, and pair ragguard with runtime controls (instruction hierarchy, output
   validation, least privilege).
-- **Heuristic, not semantic.** Pattern families catch phrasing, not intent. Stretching regexes to
+- **Default heuristics have limited intent coverage.** Pattern families catch phrasing, not intent. Stretching regexes to
   chase paraphrases would raise false positives; the optional semantic adapter interface supports independently evaluated models.
 - **English-centric** word shapes. Deobfuscation folds a curated set of Cyrillic, Greek and
   Latin-extension look-alikes, not the full Unicode confusables table.
@@ -499,7 +530,8 @@ results and the anti-overfitting rule.
   mostly by `delimiter_injection` on docs that show `<iframe>`/`<script>` markup, and 15% of
   security write-ups that quote attacks. Calibrate with `family_actions`, `enabled_families` and
   `review_floor` on representative benign data before enabling `auto_reject`.
-- **Encoded payloads are decoded once.** Only one level of base64 or hex is decoded, within fixed
+- **Encoded payloads are decoded once.** Budget exhaustion is explicitly incomplete
+  and withheld by `ContentBoundary`, including monitor mode. Only one level of base64 or hex is decoded, within fixed
   bounds; nested or other encodings (rot13, compression, custom ciphers) are not.
 - **Evidence is drawn from normalised text** where the raw form can't be located (decoded entities,
   stripped zero-width characters, deobfuscated or decoded surfaces).
@@ -572,8 +604,10 @@ findings, and the remediation text.
 - [x] Synthetic evaluation corpus with a CI regression gate
 - [x] Optional [semantic-detector adapter interface](docs/DETECTORS.md), with bounded inputs,
       validated outputs, fail-closed errors and observed latency/adapter-reported usage
-- [ ] Independently evaluate a real semantic model on paraphrased and multilingual attacks;
-      an offline pinned adapter is available, but no weights or measured semantic recall gain ship
+- [x] Pinned real-model classifier evaluation with errors, calibration and negative results preserved
+- [x] Paired local generation smoke probe with explicit blocking costs and judging limits
+- [ ] Deployment-matched multilingual, adaptive and agent-tool evaluation; public classifier
+      datasets and small smoke probes do not establish these capabilities
 - [ ] Rule pack as data, with a native TypeScript engine so JavaScript harnesses need no Python
       worker
 - [ ] Incremental and approximate-nearest-neighbour vector assessment for stores beyond the exact,
@@ -603,9 +637,9 @@ For a proposed local-first ingestion, chunking, ranking and evaluation pipeline,
 [RAG ingestion and retrieval proposal](docs/proposals/rag-ingestion-retrieval.md).
 
 
-### Development correctness and evaluation work
+### Release compatibility and evaluation work
 
-The development tree targets `0.4.0a1` with report schema `1.2` and ruleset
+This tree targets the `0.4.0a1` alpha release with report schema `1.2` and ruleset
 `2026.10.3`. See [verification and remaining experiments](docs/IMPROVEMENT_VERIFICATION.md)
 for completeness semantics, external benchmark results, optional offline model
 calibration and executable memory/action boundaries. Strict schema consumers
