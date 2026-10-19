@@ -262,7 +262,13 @@ def _percentile(values: Sequence[float], pct: float) -> float | None:
         return None
     ordered = sorted(values)
     rank = max(0, math.ceil(pct / 100.0 * len(ordered)) - 1)
-    return round(ordered[rank], 3)
+    # 6dp, not 3dp: a fast call can complete in well under 1 microsecond, and
+    # rounding milliseconds to 3dp reports that as exactly 0.0. A reported 0.0
+    # is then indistinguishable from "no time elapsed", and any latency
+    # threshold below the rounding granularity becomes unenforceable
+    # (0.0 > 0 is never true). Keep enough precision that a non-zero
+    # measurement never rounds away to zero.
+    return round(ordered[rank], 6)
 
 
 def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -347,7 +353,7 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "latency_ms": {
                 "p50": _percentile(latencies, 50),
                 "p95": _percentile(latencies, 95),
-                "max": round(max(latencies), 3) if latencies else None,
+                "max": round(max(latencies), 6) if latencies else None,
             },
         },
         "attack_categories": by_category(attacks, "detection_rate"),
