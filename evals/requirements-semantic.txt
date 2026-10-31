@@ -10,7 +10,13 @@ certifi==2026.7.22
     #   httpx
 click==8.5.0
     # via huggingface-hub
-filelock==4.0.9
+cuda-bindings==13.4.4
+    # via torch
+cuda-pathfinder==1.8.5
+    # via cuda-bindings
+cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,cusolver,cusparse,nvjitlink,nvrtc,nvtx]==13.0.3.0
+    # via torch
+filelock==4.2.1
     # via
     #   huggingface-hub
     #   torch
@@ -44,18 +50,59 @@ mdurl==0.1.2
     # via markdown-it-py
 mpmath==1.3.0
     # via
-    #   -r evals/requirements-semantic.in
+    #   -r requirements-semantic.in
     #   sympy
 networkx==3.7
     # via torch
 numpy==2.5.3
     # via transformers
+nvidia-cublas==13.1.1.3
+    # via
+    #   cuda-toolkit
+    #   nvidia-cudnn-cu13
+    #   nvidia-cusolver
+nvidia-cuda-cupti==13.0.85
+    # via cuda-toolkit
+nvidia-cuda-nvrtc==13.0.88
+    # via
+    #   cuda-toolkit
+    #   nvidia-cublas
+nvidia-cuda-runtime==13.0.96
+    # via cuda-toolkit
+nvidia-cudnn-cu13==9.24.0.43
+    # via torch
+nvidia-cufft==12.0.0.61
+    # via cuda-toolkit
+nvidia-cufile==1.15.1.6
+    # via cuda-toolkit
+nvidia-curand==10.4.0.35
+    # via cuda-toolkit
+nvidia-cusolver==12.0.4.66
+    # via cuda-toolkit
+nvidia-cusparse==12.6.3.3
+    # via
+    #   cuda-toolkit
+    #   nvidia-cusolver
+nvidia-cusparselt-cu13==0.8.1
+    # via torch
+nvidia-nccl-cu13==2.30.7
+    # via torch
+nvidia-nvjitlink==13.4.92
+    # via
+    #   cuda-toolkit
+    #   nvidia-cufft
+    #   nvidia-cusolver
+    #   nvidia-cusparse
+nvidia-nvshmem-cu13==3.4.5
+    # via torch
+nvidia-nvtx==13.0.85
+    # via cuda-toolkit
 packaging==26.3
     # via
     #   huggingface-hub
     #   transformers
 protobuf==7.36.2
-    # via -r evals/requirements-semantic.in
+    # via -r requirements-semantic.in
 pygments==2.21.0
     # via rich
 pyyaml==6.0.3
@@ -69,9 +116,7 @@ rich==15.0.0
 safetensors==0.8.0
     # via transformers
 sentencepiece==0.2.2
-    # via -r evals/requirements-semantic.in
-setuptools==84.0.0
-    # via torch
+    # via -r requirements-semantic.in
 shellingham==1.5.4
     # via typer
 sympy==1.14.0
@@ -79,13 +124,15 @@ sympy==1.14.0
 tokenizers==0.22.2
     # via transformers
 torch==2.14.0
-    # via -r evals/requirements-semantic.in
+    # via -r requirements-semantic.in
 tqdm==4.70.1
     # via
     #   huggingface-hub
     #   transformers
 transformers==5.10.1
-    # via -r evals/requirements-semantic.in
+    # via -r requirements-semantic.in
+triton==3.8.0
+    # via torch
 typer==0.27.2
     # via transformers
 typing-extensions==4.16.0
